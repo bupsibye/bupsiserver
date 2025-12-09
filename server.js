@@ -6,7 +6,7 @@ const app = express();
 // === Парсим JSON ===
 app.use(express.json());
 
-// === CORS: разрешаем фронтенд ===
+// === CORS: разрешаем фронтенд на Vercel ===
 const allowedOrigins = [
   'https://t.me',
   'https://web.telegram.org',
@@ -27,7 +27,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Раздаём статику (если нужно)
+// Раздаём статику (на случай, если понадобится)
 app.use(express.static('.'));
 
 // === Переменные ===
@@ -70,17 +70,16 @@ const users = new Map(); // userId → { stars, username }
 const exchanges = new Map();
 const history = [];
 
-// === ОБРАБОТЧИК /start — СОХРАНЯЕМ ПОЛЬЗОВАТЕЛЯ ===
+// === ОБРАБОТЧИК /start — сохраняем пользователя ===
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const username = msg.from.username || `user${chatId}`;
   console.log("📩 /start от:", chatId, username);
 
   // Сохраняем пользователя
-  users.set(chatId, {
-    stars: users.get(chatId)?.stars || 0,
-    username
-  });
+  if (!users.has(chatId)) {
+    users.set(chatId, { stars: 0, username });
+  }
 
   const startParam = msg.text.split(' ')[1];
 
@@ -95,7 +94,7 @@ bot.onText(/\/start/, (msg) => {
 👉 Нажми кнопку ниже, чтобы принять.
     `;
     buttonText = "Принять обмен";
-    buttonUrl = `https://knoxway-bot.t.me/app?startapp=${startParam}`;
+    buttonUrl = `https://bupsiapp.vercel.app?startapp=${startParam}`;
   } else {
     messageText = `
 👋 Привет! Добро пожаловать в *Bupsi*!
@@ -108,7 +107,7 @@ bot.onText(/\/start/, (msg) => {
 Нажми кнопку ниже, чтобы начать:
     `;
     buttonText = "Открыть App";
-    buttonUrl = "https://knoxway-bot.t.me/app";
+    buttonUrl = "https://bupsiapp.vercel.app";
   }
 
   bot.sendMessage(chatId, messageText, {
@@ -119,7 +118,7 @@ bot.onText(/\/start/, (msg) => {
       ]
     }
   }).catch(err => {
-    console.error(`❌ Не удалось отправить /start ${chatId}:`, err.response?.body?.description);
+    console.error(`❌ Ошибка отправки /start ${chatId}:`, err.response?.body?.description);
   });
 });
 
@@ -145,7 +144,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     return res.json({ success: false, error: "Недостаточно данных" });
   }
 
-  // Ищем по username
+  // Ищем пользователя по username
   let toId = null;
   let toUser = null;
 
@@ -183,7 +182,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     `, {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Принять обмен", web_app: { url: `https://knoxway-bot.t.me/app?startapp=exchange_${sessionId}` } }]
+          [{ text: "Принять обмен", web_app: { url: `https://bupsiapp.vercel.app?startapp=exchange_${sessionId}` } }]
         ]
       }
     });
