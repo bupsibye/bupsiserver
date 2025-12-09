@@ -66,7 +66,7 @@ bot.onText(/\/start/, (msg) => {
 
 Кто-то хочет обменяться с тобой ⭐
 
-👉 Открой Mini App, чтобы принять или отклонить.
+👉 Нажми кнопку ниже, чтобы принять.
     `, {
       reply_markup: {
         inline_keyboard: [
@@ -144,16 +144,20 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
   });
 
   try {
-    await bot.sendMessage(toId, `
+ await bot.sendMessage(toId, `
 🔄 Запрос на обмен!
 
 От: @${fromUsername}
 Сумма: ${stars} ⭐
 
 👉 Нажми кнопку ниже, чтобы принять.
-
-[Принять обмен](https://t.me/bupsibot/app?startapp=${sessionId})
-    `, { parse_mode: 'Markdown' });
+    `, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "Принять обмен", web_app: { url: `https://t.me/bupsibot/app?startapp=${sessionId}` } }]
+        ]
+      }
+    });
 
     history.push({
       userId: fromId,
