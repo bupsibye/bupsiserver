@@ -165,7 +165,9 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
 
   exchanges.set(sessionId, {
     fromId,
+    fromUsername,
     toId,
+    toUsername: targetUsername,
     stars,
     status: 'pending',
     timestamp: Date.now()
@@ -178,11 +180,14 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
 От: @${fromUsername}
 Сумма: ${stars} ⭐
 
-👉 Нажми кнопку ниже, чтобы принять.
+👉 Примите или отклоните:
     `, {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Принять обмен", web_app: { url: `https://bupsiapp.vercel.app?startapp=exchange_${sessionId}` } }]
+          [
+            { text: "✅ Принять", web_app: { url: `https://bupsiapp.vercel.app?startapp=exchange_${sessionId}` } },
+            { text: "❌ Отклонить", callback_data: `decline_exchange_${sessionId}` }
+          ]
         ]
       }
     });
@@ -262,6 +267,43 @@ app.get('/api/hello/:userId', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.json({ success: false, error: "Напишите /start боту" });
+  }
+});
+
+// === ОБРАБОТЧИК: отклонение обмена ===
+bot.on('callback_query', async (callbackQuery) => {
+  const { id, from, data, message } = callbackQuery;
+  const chatId = from.id;
+
+  if (data?.startsWith('decline_exchange_')) {
+    const sessionId = data.replace('decline_exchange_', '');
+    const exchange = exchanges.get(sessionId);
+
+    if (!exchange || exchange.status !== 'pending' || exchange.toId !== chatId) {
+      return bot.answerCallbackQuery(id, { text: "Сессия недействительна", show_alert: true });
+    }
+
+    // Меняем статус
+    exchange.status = 'declined';
+
+    // Отправляем уведомление отправителю
+    try {
+      await bot.sendMessage(exchange.fromId, `❌ @${exchange.toUsername} отказался от вашего предложения обмена`);
+    } catch (err) {
+      console.error("❌ Не удалось уведомить отправителя:", err);
+    }
+
+    // Уведомляем получателя
+    await bot.answerCallbackQuery(id, {
+      text: "Вы отклонили обмен",
+      show_alert: true
+    });
+
+    // Убираем кнопки
+    bot.editMessageReplyMarkup(
+      { inline_keyboard: [] },
+      { chat_id: chatId, message_id: message.message_id }
+    );
   }
 });
 
