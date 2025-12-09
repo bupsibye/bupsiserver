@@ -1,46 +1,96 @@
 const express = require('express');
-const bodyParser = require('body-parser');
 const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 app.use(express.static('.'));
 
 // === ТОКЕН БОТА ===
 const BOT_TOKEN = process.env.BOT_TOKEN || '8212274685:AAEN_jjb3hUnVN9CxdR9lSrG416yQXmk4Tk';
-const bot = new TelegramBot(BOT_TOKEN, {
-  polling: {
-    interval: 1000,
-    autoStart: true,
-    params: { timeout: 10 }
-  }
+const bot = new TelegramBot(BOT_TOKEN);
+
+// === URL вашего сервера (обязательно HTTPS!) ===
+const SERVER_URL = process.env.SERVER_URL || 'https://bupsiserver.onrender.com';
+
+// Установка Webhook при старте
+app.on('ready', async () => {
+  const webhookUrl = `${SERVER_URL}/${BOT_TOKEN}`;
+  await bot.setWebHook(webhookUrl);
+  console.log(`✅ Webhook установлен: ${webhookUrl}`);
 });
-
-// 🟨 ВРЕМЕННОЕ ХРАНИЛИЩЕ (в памяти). Позже заменить на БД
-const users = new Map(); // userId → { stars, username }
-const exchanges = new Map(); // sessionId → { fromId, toId, stars, status }
-const history = []; // Массив операций: { userId, type, description, date }
-
-// Инициализация тестовых пользователей (опционально)
-users.set(123456789, { stars: 100, username: 'testuser' });
 
 // === ОСНОВНЫЕ МАРШРУТЫ ===
 
 // Проверка сервера
 app.get('/', (req, res) => {
-  res.send('✅ Сервер работает! Добро пожаловать в BupsiServer');
+  res.send('✅ Сервер работает! BupsiServer активен.');
 });
 
-app.get('/api/test', (req, res) => {
-  res.json({ success: true, message: "API живо", timestamp: new Date().toISOString() });
+// Точка, куда Telegram стучится
+app.use(`/${BOT_TOKEN}`, bot.webhookCallback());
+
+// Проверка Webhook (для отладки: /webhook-info)
+app.get('/webhook-info', async (req, res) => {
+  try {
+    const info = await bot.getWebHookInfo();
+    res.json(info);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// === API: Получение баланса пользователя ===
+// === ОБРАБОТЧИК /start ===
+bot.onText(/\/start/, (msg) => {
+  const chatId = msg.chat.id;
+  const startParam = msg.text.split(' ')[1]; // /start exchange_abc123
+
+  if (startParam?.startsWith('exchange_')) {
+    bot.sendMessage(chatId, `
+🔄 Обмен начат!
+
+Кто-то хочет обменяться с тобой ⭐
+
+👉 Открой Mini App, чтобы принять или отклонить.
+    `, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "Открыть App", web_app: { url: "https://t.me/bupsibot/app" } }]
+        ]
+      }
+    });
+  } else {
+    bot.sendMessage(chatId, `
+👋 Привет! Добро пожаловать в *Bupsi*!
+
+Здесь ты можешь:
+- 💬 Обмениваться ⭐ с друзьями
+- 🎁 Покупать и дарить подарки
+- 📊 Повышать свой статус
+
+Нажми кнопку ниже, чтобы начать:
+    `, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "Открыть Mini App", web_app: { url: "https://t.me/bupsibot/app" } }]
+        ]
+      }
+    });
+  }
+});
+
+// === ВРЕМЕННОЕ ХРАНИЛИЩЕ (в памяти) ===
+const users = new Map(); // userId → { stars, username }
+const exchanges = new Map(); // sessionId → { fromId, toId, stars, status }
+const history = []; // { userId, type, description, date }
+
+// Инициализация тестового пользователя
+users.set(123456789, { stars: 100, username: 'testuser' });
+
+// === API: Получение баланса ===
 app.get('/api/stars/:userId', (req, res) => {
   const userId = parseInt(req.params.userId);
-  if (isNaN(userId)) {
-    return res.status(400).json({ error: "Неверный ID" });
-  }
+  if (isNaN(userId)) return res.status(400).json({ error: "Неверный ID" });
 
   let user = users.get(userId);
   if (!user) {
@@ -59,21 +109,17 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     return res.json({ success: false, error: "Недостаточно данных" });
   }
 
-  // В реальной версии: искать targetUsername в БД или через Telegram API
-  // Сейчас — имитация: создаём "виртуального" пользователя
-  const toId = 987654321; // Здесь может быть реальный ID из БД
-  const toUsername = targetUsername;
-
+  // В реальности: искать пользователя по username через Telegram API
+  const toId = 987654321; // Заглушка
   let toUser = users.get(toId);
   if (!toUser) {
-    toUser = { stars: 50, username: toUsername };
+    toUser = { stars: 50, username: targetUsername };
     users.set(toId, toUser);
   }
 
-  const stars = 50; // Сумма обмена (позже — параметр)
+  const stars = 50;
   const sessionId = `ex_${Date.now()}_${fromId}`;
 
-  // Сохраняем сессию обмена
   exchanges.set(sessionId, {
     fromId,
     toId,
@@ -83,62 +129,45 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
   });
 
   try {
-    // Отправляем сообщение получателю
     await bot.sendMessage(toId, `
 🔄 Запрос на обмен!
 
 От: @${fromUsername}
 Сумма: ${stars} ⭐
 
-👉 Нажмите кнопку ниже, чтобы принять обмен.
+👉 Нажми кнопку ниже, чтобы принять.
 
-[Принять обмен](https://t.me/bupsibot/app?startapp=exchange_${sessionId})
-    `, {
-      parse_mode: 'Markdown',
-      disable_web_page_preview: true
-    });
+[Принять обмен](https://t.me/bupsibot/app?startapp=${sessionId})
+    `, { parse_mode: 'Markdown' });
 
-    // Логируем операцию
     history.push({
       userId: fromId,
       type: 'exchange_pending',
-      description: `Запрос на обмен ${stars} ⭐ пользователю @${toUsername}`,
+      description: `Запрос на обмен ${stars} ⭐ пользователю @${targetUsername}`,
       date: new Date().toISOString()
     });
 
-    console.log(`🔄 Обмен инициирован: ${fromId} → ${toId}, session=${sessionId}`);
-
     res.json({ success: true, sessionId });
-
   } catch (err) {
-    console.error("❌ Ошибка отправки сообщения:", err);
-    res.json({ success: false, error: "Не удалось отправить запрос получателю" });
+    console.error("❌ Ошибка отправки:", err);
+    res.json({ success: false, error: "Не удалось отправить запрос" });
   }
 });
 
-// === API: Принять обмен (по ссылке) ===
+// === API: Принять обмен ===
 app.get('/api/accept-exchange/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   const exchange = exchanges.get(sessionId);
 
-  if (!exchange) {
-    return res.json({ success: false, error: "Сессия не найдена" });
-  }
-
-  if (exchange.status !== 'pending') {
-    return res.json({ success: false, error: "Обмен уже обработан" });
+  if (!exchange || exchange.status !== 'pending') {
+    return res.json({ success: false, error: "Сессия не найдена или уже обработана" });
   }
 
   const fromUser = users.get(exchange.fromId);
   const toUser = users.get(exchange.toId);
 
-  if (!fromUser || !toUser) {
-    return res.json({ success: false, error: "Пользователь не найден" });
-  }
-
-  // Проверка баланса отправителя
-  if (fromUser.stars < exchange.stars) {
-    return res.json({ success: false, error: "Недостаточно звёзд" });
+  if (!fromUser || !toUser || fromUser.stars < exchange.stars) {
+    return res.json({ success: false, error: "Ошибка: недостаточно средств или пользователь не найден" });
   }
 
   // Проводим обмен
@@ -146,7 +175,7 @@ app.get('/api/accept-exchange/:sessionId', async (req, res) => {
   toUser.stars += exchange.stars;
   exchange.status = 'accepted';
 
-  // Добавляем в историю
+  // История
   history.push({
     userId: exchange.fromId,
     type: 'stars_out',
@@ -161,13 +190,9 @@ app.get('/api/accept-exchange/:sessionId', async (req, res) => {
     date: new Date().toISOString()
   });
 
-  try {
-    // Уведомления
-    await bot.sendMessage(exchange.fromId, `✅ Ваш обмен принят! Вы отправили ${exchange.stars} ⭐`);
-    await bot.sendMessage(exchange.toId, `✅ Вы получили ${exchange.stars} ⭐ от @${fromUser.username}`);
-  } catch (err) {
-    console.error("⚠️ Не удалось отправить уведомление:", err);
-  }
+  // Уведомления
+  await bot.sendMessage(exchange.fromId, `✅ Обмен принят! Вы отправили ${exchange.stars} ⭐`);
+  await bot.sendMessage(exchange.toId, `✅ Обмен завершён! Вы получили ${exchange.stars} ⭐`);
 
   res.json({ success: true, stars: toUser.stars });
 });
@@ -175,26 +200,24 @@ app.get('/api/accept-exchange/:sessionId', async (req, res) => {
 // === API: История операций ===
 app.get('/api/history/:userId', (req, res) => {
   const userId = parseInt(req.params.userId);
-  if (isNaN(userId)) {
-    return res.status(400).json({ error: "Неверный ID" });
-  }
+  if (isNaN(userId)) return res.status(400).json({ error: "Неверный ID" });
 
   const userHistory = history
     .filter(h => h.userId === userId)
-    .sort((a, b) => new Date(b.date) - new Date(a.date)) // новые сверху
-    .slice(0, 50); // лимит
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .slice(0, 50);
 
   res.json(userHistory);
 });
 
-// === API: Диалог подтверждён (пример) ===
+// === API: Диалог подтверждён (тест) ===
 app.get('/api/hello/:userId', async (req, res) => {
   const userId = parseInt(req.params.userId);
   try {
-    await bot.sendMessage(userId, "✅ Диалог подтверждён — приложение готово!", { parse_mode: 'Markdown' });
+    await bot.sendMessage(userId, "✅ Диалог подтверждён — всё работает!", { parse_mode: 'Markdown' });
     res.json({ success: true });
   } catch (err) {
-    res.json({ success: false, error: "Напишите /start боту в Telegram" });
+    res.json({ success: false, error: "Напишите /start боту" });
   }
 });
 
@@ -202,5 +225,5 @@ app.get('/api/hello/:userId', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
-  console.log(`🔗 API доступно: /api/test`);
+  app.emit('ready'); // Запускаем инициализацию Webhook
 });
