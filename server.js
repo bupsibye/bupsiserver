@@ -6,7 +6,7 @@ const app = express();
 // === Парсим JSON ===
 app.use(express.json());
 
-// === CORS: разрешаем Telegram и Vercel ===
+// === CORS: разрешаем фронтенд ===
 const allowedOrigins = [
   'https://t.me',
   'https://web.telegram.org',
@@ -27,6 +27,7 @@ app.use((req, res, next) => {
   next();
 });
 
+// Раздаём статику (если нужно)
 app.use(express.static('.'));
 
 // === Переменные ===
@@ -64,36 +65,39 @@ app.get('/webhook-info', async (req, res) => {
   }
 });
 
+// === ВРЕМЕННОЕ ХРАНИЛИЩЕ ===
+const users = new Map(); // userId → { stars, username }
+const exchanges = new Map();
+const history = [];
+
 // === ОБРАБОТЧИК /start — СОХРАНЯЕМ ПОЛЬЗОВАТЕЛЯ ===
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const username = msg.from.username || `user${chatId}`;
   console.log("📩 /start от:", chatId, username);
 
-  // ✅ Сохраняем пользователя при первом входе
-  let user = users.get(chatId);
-  if (!user) {
-    users.set(chatId, { stars: 0, username });
-  }
+  // Сохраняем пользователя
+  users.set(chatId, {
+    stars: users.get(chatId)?.stars || 0,
+    username
+  });
 
   const startParam = msg.text.split(' ')[1];
 
+  let messageText, buttonText, buttonUrl;
+
   if (startParam?.startsWith('exchange_')) {
-    bot.sendMessage(chatId, `
+    messageText = `
 🔄 Обмен начат!
 
 Кто-то хочет обменяться с тобой ⭐
 
 👉 Нажми кнопку ниже, чтобы принять.
-    `, {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "Открыть App", web_app: { url: "https://t.me/knoxway_bot/app" } }]
-        ]
-      }
-    });
+    `;
+    buttonText = "Принять обмен";
+    buttonUrl = `https://knoxway-bot.t.me/app?startapp=${startParam}`;
   } else {
-    bot.sendMessage(chatId, `
+    messageText = `
 👋 Привет! Добро пожаловать в *Bupsi*!
 
 Здесь ты можешь:
@@ -102,21 +106,22 @@ bot.onText(/\/start/, (msg) => {
 - 📊 Повышать свой статус
 
 Нажми кнопку ниже, чтобы начать:
-    `, {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "Открыть App", web_app: { url: "https://t.me/knoxway_bot/app" } }]
-        ]
-      }
-    });
+    `;
+    buttonText = "Открыть App";
+    buttonUrl = "https://knoxway-bot.t.me/app";
   }
-});
 
-// === ВРЕМЕННОЕ ХРАНИЛИЩЕ ===
-const users = new Map(); // ← Ключ: userId
-const exchanges = new Map();
-const history = [];
+  bot.sendMessage(chatId, messageText, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: buttonText, web_app: { url: buttonUrl } }]
+      ]
+    }
+  }).catch(err => {
+    console.error(`❌ Не удалось отправить /start ${chatId}:`, err.response?.body?.description);
+  });
+});
 
 // === API: Баланс ===
 app.get('/api/stars/:userId', (req, res) => {
@@ -140,7 +145,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     return res.json({ success: false, error: "Недостаточно данных" });
   }
 
-  // Ищем пользователя по username
+  // Ищем по username
   let toId = null;
   let toUser = null;
 
@@ -178,7 +183,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     `, {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Принять обмен", web_app: { url: `https://t.me/knoxway_bot/app?startapp=exchange_${sessionId}` } }]
+          [{ text: "Принять обмен", web_app: { url: `https://knoxway-bot.t.me/app?startapp=exchange_${sessionId}` } }]
         ]
       }
     });
@@ -261,7 +266,7 @@ app.get('/api/hello/:userId', async (req, res) => {
   }
 });
 
-// === ЗАПУСК СЕРВЕРА И УСТАНОВКА WEBHOOK ===
+// === ЗАПУСК СЕРВЕРА ===
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
 
