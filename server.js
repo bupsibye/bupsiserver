@@ -6,11 +6,11 @@ const app = express();
 // === Парсим JSON ===
 app.use(express.json());
 
-// === CORS: разрешаем Telegram и твой Vercel-фронтенд ===
+// === CORS: разрешаем Telegram и Vercel ===
 const allowedOrigins = [
   'https://t.me',
   'https://web.telegram.org',
-  'https://bupsiapp.vercel.app' // ← Твой фронтенд
+  'https://bupsiapp.vercel.app'
 ];
 
 app.use((req, res, next) => {
@@ -27,7 +27,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Раздаём статику (вдруг понадобится)
 app.use(express.static('.'));
 
 // === Переменные ===
@@ -65,10 +64,18 @@ app.get('/webhook-info', async (req, res) => {
   }
 });
 
-// === ОБРАБОТЧИК /start ===
+// === ОБРАБОТЧИК /start — СОХРАНЯЕМ ПОЛЬЗОВАТЕЛЯ ===
 bot.onText(/\/start/, (msg) => {
-  console.log("📩 Получен /start от:", msg.chat.id, msg.chat.username);
   const chatId = msg.chat.id;
+  const username = msg.from.username || `user${chatId}`;
+  console.log("📩 /start от:", chatId, username);
+
+  // ✅ Сохраняем пользователя при первом входе
+  let user = users.get(chatId);
+  if (!user) {
+    users.set(chatId, { stars: 0, username });
+  }
+
   const startParam = msg.text.split(' ')[1];
 
   if (startParam?.startsWith('exchange_')) {
@@ -107,12 +114,9 @@ bot.onText(/\/start/, (msg) => {
 });
 
 // === ВРЕМЕННОЕ ХРАНИЛИЩЕ ===
-const users = new Map();
+const users = new Map(); // ← Ключ: userId
 const exchanges = new Map();
 const history = [];
-
-// Для теста: добавим пользователя
-users.set(123456789, { stars: 100, username: 'testuser' });
 
 // === API: Баланс ===
 app.get('/api/stars/:userId', (req, res) => {
@@ -136,12 +140,20 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     return res.json({ success: false, error: "Недостаточно данных" });
   }
 
-  // Заглушка: toId — тестовый пользователь
-  const toId = 123456789; // ← Замени на свой ID, если нужно
-  let toUser = users.get(toId);
-  if (!toUser) {
-    toUser = { stars: 50, username: targetUsername };
-    users.set(toId, toUser);
+  // Ищем пользователя по username
+  let toId = null;
+  let toUser = null;
+
+  for (const [id, user] of users) {
+    if (user.username === targetUsername) {
+      toId = id;
+      toUser = user;
+      break;
+    }
+  }
+
+  if (!toId) {
+    return res.json({ success: false, error: "Пользователь не найден или не писал боту" });
   }
 
   const stars = 50;
@@ -181,7 +193,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     res.json({ success: true, sessionId });
   } catch (err) {
     console.error("❌ Ошибка отправки:", err.response?.body?.description || err.message);
-    res.json({ success: false, error: "Не удалось отправить запрос" });
+    res.json({ success: false, error: "Не удалось отправить запрос. Пользователь не писал боту." });
   }
 });
 
@@ -253,7 +265,6 @@ app.get('/api/hello/:userId', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
 
-  // Ждём 3 секунды — чтобы сервер точно стал доступен
   setTimeout(async () => {
     try {
       await bot.setWebHook(webhookUrl);
