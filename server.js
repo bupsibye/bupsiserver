@@ -56,6 +56,7 @@ app.get('/webhook-info', async (req, res) => {
 
 // === ОБРАБОТЧИК /start ===
 bot.onText(/\/start/, (msg) => {
+  console.log("📩 Получен /start от:", msg.chat.id, msg.chat.username);
   const chatId = msg.chat.id;
   const startParam = msg.text.split(' ')[1];
 
@@ -233,10 +234,10 @@ app.get('/api/hello/:userId', async (req, res) => {
 });
 
 // === ЗАПУСК СЕРВЕРА И УСТАНОВКА WEBHOOK ===
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
 
-  // Ждём 3 секунды — чтобы сервер точно стал доступен
+  // ДАЁМ ВРЕМЯ СЕРВЕРУ ЗАГРУЗИТЬСЯ
   setTimeout(async () => {
     try {
       await bot.setWebHook(webhookUrl);
