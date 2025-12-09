@@ -3,50 +3,48 @@ const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
 
-// === Парсим JSON и раздаём статику ===
+// === Парсим JSON и CORS ===
 app.use(express.json());
+
+// === CORS для Telegram Mini Apps ===
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', 'https://t.me');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.static('.'));
 
-// === Переменные: BOT_TOKEN и SERVER_URL ===
+// === Переменные ===
 const BOT_TOKEN = process.env.BOT_TOKEN || '8212274685:AAEN_jjb3hUnVN9CxdR9lSrG416yQXmk4Tk';
 const SERVER_URL = process.env.SERVER_URL || 'https://bupsiserver.onrender.com';
 const PORT = process.env.PORT || 3000;
 
-// === Инициализация бота ===
-const bot = new TelegramBot(BOT_TOKEN, { polling: false }); // Webhook, не polling!
+const bot = new TelegramBot(BOT_TOKEN, { polling: false });
 
-// Логи для отладки (можно убрать позже)
 console.log("✅ BOT_TOKEN:", BOT_TOKEN);
 console.log("✅ SERVER_URL:", SERVER_URL);
 console.log("✅ PORT:", PORT);
 
-// === Установка Webhook и обработка обновлений ===
+// === Webhook URL ===
 const webhookUrl = `${SERVER_URL}/${BOT_TOKEN}`;
 
-// Обработка входящих запросов от Telegram
+// === Обработка обновлений от Telegram ===
 app.post(`/${BOT_TOKEN}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
-// Установка Webhook при старте
-async function setupWebhook() {
-  try {
-    await bot.setWebHook(webhookUrl);
-    console.log(`✅ Webhook установлен: ${webhookUrl}`);
-  } catch (err) {
-    console.error('❌ Ошибка установки Webhook:', err.message);
-  }
-}
-
-// === ОСНОВНЫЕ МАРШРУТЫ ===
-
-// Главная страница
-app.get('/', (req, res) => {
-  res.send('✅ Сервер работает! BupsiServer активен.');
+// === ПРОВЕРКА: API живо? ===
+app.get('/api/test', (req, res) => {
+  res.json({ success: true, message: "API живо" });
 });
 
-// Проверка Webhook (для отладки)
+// === Проверка Webhook ===
 app.get('/webhook-info', async (req, res) => {
   try {
     const info = await bot.getWebHookInfo();
@@ -59,7 +57,7 @@ app.get('/webhook-info', async (req, res) => {
 // === ОБРАБОТЧИК /start ===
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  const startParam = msg.text.split(' ')[1]; // /start exchange_abc123
+  const startParam = msg.text.split(' ')[1];
 
   if (startParam?.startsWith('exchange_')) {
     bot.sendMessage(chatId, `
@@ -96,15 +94,14 @@ bot.onText(/\/start/, (msg) => {
   }
 });
 
-// === ВРЕМЕННОЕ ХРАНИЛИЩЕ (в памяти) ===
-const users = new Map(); // userId → { stars, username }
-const exchanges = new Map(); // sessionId → { fromId, toId, stars, status }
-const history = []; // { userId, type, description, date }
+// === ВРЕМЕННОЕ ХРАНИЛИЩЕ ===
+const users = new Map();
+const exchanges = new Map();
+const history = [];
 
-// Инициализация тестового пользователя
 users.set(123456789, { stars: 100, username: 'testuser' });
 
-// === API: Получение баланса ===
+// === API: Баланс ===
 app.get('/api/stars/:userId', (req, res) => {
   const userId = parseInt(req.params.userId);
   if (isNaN(userId)) return res.status(400).json({ error: "Неверный ID" });
@@ -118,7 +115,7 @@ app.get('/api/stars/:userId', (req, res) => {
   res.json({ stars: user.stars });
 });
 
-// === API: Начать обмен по username ===
+// === API: Начать обмен ===
 app.post('/api/start-exchange-by-username', async (req, res) => {
   const { fromId, fromUsername, targetUsername } = req.body;
 
@@ -126,8 +123,8 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     return res.json({ success: false, error: "Недостаточно данных" });
   }
 
-  // В реальности: искать пользователя по username через Telegram API
-  const toId = 987654321; // Заглушка
+  // Заглушка: toId — это ты (чтобы тестировать)
+  const toId = 123456789; // ← ЗАМЕНИ НА СВОЙ ID, если нужно
   let toUser = users.get(toId);
   if (!toUser) {
     toUser = { stars: 50, username: targetUsername };
@@ -166,7 +163,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
 
     res.json({ success: true, sessionId });
   } catch (err) {
-    console.error("❌ Ошибка отправки:", err);
+    console.error("❌ Ошибка отправки:", err.response?.body?.description || err.message);
     res.json({ success: false, error: "Не удалось отправить запрос" });
   }
 });
@@ -187,12 +184,10 @@ app.get('/api/accept-exchange/:sessionId', async (req, res) => {
     return res.json({ success: false, error: "Ошибка: недостаточно средств или пользователь не найден" });
   }
 
-  // Проводим обмен
   fromUser.stars -= exchange.stars;
   toUser.stars += exchange.stars;
   exchange.status = 'accepted';
 
-  // История
   history.push({
     userId: exchange.fromId,
     type: 'stars_out',
@@ -207,14 +202,13 @@ app.get('/api/accept-exchange/:sessionId', async (req, res) => {
     date: new Date().toISOString()
   });
 
-  // Уведомления
   await bot.sendMessage(exchange.fromId, `✅ Обмен принят! Вы отправили ${exchange.stars} ⭐`);
   await bot.sendMessage(exchange.toId, `✅ Обмен завершён! Вы получили ${exchange.stars} ⭐`);
 
   res.json({ success: true, stars: toUser.stars });
 });
 
-// === API: История операций ===
+// === API: История ===
 app.get('/api/history/:userId', (req, res) => {
   const userId = parseInt(req.params.userId);
   if (isNaN(userId)) return res.status(400).json({ error: "Неверный ID" });
@@ -227,7 +221,7 @@ app.get('/api/history/:userId', (req, res) => {
   res.json(userHistory);
 });
 
-// === API: Диалог подтверждён (тест) ===
+// === API: Диалог подтверждён ===
 app.get('/api/hello/:userId', async (req, res) => {
   const userId = parseInt(req.params.userId);
   try {
@@ -238,8 +232,17 @@ app.get('/api/hello/:userId', async (req, res) => {
   }
 });
 
-// === ЗАПУСК СЕРВЕРА ===
+// === ЗАПУСК СЕРВЕРА И УСТАНОВКА WEBHOOK ===
 app.listen(PORT, async () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
-  await setupWebhook(); // Устанавливаем Webhook после запуска сервера
+
+  // Ждём 3 секунды — чтобы сервер точно стал доступен
+  setTimeout(async () => {
+    try {
+      await bot.setWebHook(webhookUrl);
+      console.log(`✅ Webhook УСПЕШНО установлен: ${webhookUrl}`);
+    } catch (err) {
+      console.error('❌ Ошибка установки Webhook:', err.response?.body?.description || err.message);
+    }
+  }, 3000);
 });
