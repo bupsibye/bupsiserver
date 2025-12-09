@@ -1,129 +1,182 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const TelegramBot = require('node-telegram-bot-api');
+// === Инициализация Telegram WebApp ===
+const tg = window.Telegram?.WebApp;
 
-const app = express();
-app.use(bodyParser.json());
-app.use(express.static('.'));
+if (tg) {
+  tg.ready();
+  tg.expand();
+  console.log('✅ Telegram WebApp: готов');
+} else {
+  console.warn('❌ Telegram WebApp не доступен. Добавьте <script src="https://telegram.org/js/telegram-web-app.js"></script>');
+}
 
-// === ТОКЕН ===
-const BOT_TOKEN = process.env.BOT_TOKEN || '8212274685:AAEN_jjb3hUnVN9CxdR9lSrG416yQXmk4Tk';
-const bot = new TelegramBot(BOT_TOKEN, {
-  polling: {
-    interval: 1000,
-    autoStart: true,
-    params: { timeout: 10 }
+// === Применение темы ===
+function applyTheme() {
+  const theme = tg?.themeParams || {};
+  const dark = tg?.colorScheme === 'dark';
+  document.documentElement.style.setProperty('--tg-bg', theme.bg_color || (dark ? '#1a1a1a' : '#fff'));
+  document.documentElement.style.setProperty('--tg-text', theme.text_color || (dark ? '#fff' : '#000'));
+  document.documentElement.style.setProperty('--tg-hint', theme.hint_color || (dark ? '#999' : '#888'));
+  document.documentElement.style.setProperty('--tg-accent', theme.accent_text_color || '#0088cc');
+  document.documentElement.style.setProperty('--tg-secondary-bg', dark ? '#2c2c2c' : '#f0f0f0');
+  document.documentElement.style.setProperty('--tg-border', dark ? '#444' : '#ddd');
+}
+applyTheme();
+
+// === Получение пользователя из Telegram ===
+let user = null;
+
+try {
+  if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+    user = tg.initDataUnsafe.user;
+    console.log('✅ Пользователь получен:', user);
+  } else {
+    console.warn('❌ initData не содержит user. Откройте Mini App через кнопку в боте.');
   }
-});
+} catch (err) {
+  console.error('❌ Ошибка при получении пользователя:', err);
+}
 
-// === CORS ===
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
-  next();
-});
+// === DOM-элементы ===
+const starsCount = document.getElementById("stars-count");
+const userIdEl = document.getElementById("user-id");
+const usernameEl = document.getElementById("user-username");
+const avatarEl = document.getElementById("user-avatar");
+const startExchangeBtn = document.getElementById("start-exchange-by-username");
 
-// === ХРАНИЛИЩЕ ===
-const userStars = new Map();
-const userHistory = new Map();
+// === Отображение профиля ===
+if (user && userIdEl) {
+  userIdEl.textContent = user.id;
+  console.log('🆔 ID отображён:', user.id);
+} else if (userIdEl) {
+  userIdEl.textContent = "—";
+}
 
-const getHistory = (userId) => {
-  if (!userHistory.has(userId)) userHistory.set(userId, []);
-  return userHistory.get(userId);
-};
+if (user && usernameEl) {
+  usernameEl.textContent = user.username ? `@${user.username}` : "не задан";
+  console.log('👤 Username:', user.username || "не задан");
+} else if (usernameEl) {
+  usernameEl.textContent = "не задан";
+}
 
-const addHistory = (userId, type, text) => {
-  const history = getHistory(userId);
-  history.push({ type, text, date: new Date().toLocaleString('ru') });
-  userHistory.set(userId, history);
-};
+if (user && avatarEl) {
+  const photoUrl = user.photo_url 
+    ? `${user.photo_url}&s=150` 
+    : `https://ui-avatars.com/api/?name=${encodeURIComponent(user.first_name || 'User')}&background=random&size=100`;
 
-// === API: баланс ===
-app.get('/api/stars/:userId', (req, res) => {
-  const stars = userStars.get(parseInt(req.params.userId)) || 0;
-  res.json({ stars });
-});
-
-// === API: история ===
-app.get('/api/history/:userId', (req, res) => {
-  const history = userHistory.get(parseInt(req.params.userId)) || [];
-  res.json(history);
-});
-
-// === API: обмен ===
-app.post('/api/start-exchange-by-username', async (req, res) => {
-  const { fromId, fromUsername, targetUsername } = req.body;
-  const cleanTarget = targetUsername.replace(/^@/, '').toLowerCase();
-
-  if (!cleanTarget || cleanTarget === (fromUsername || `user${fromId}`).toLowerCase()) {
-    return res.json({ success: false, error: "Неверный username" });
-  }
-
-  let toId;
-  try {
-    const chat = await bot.getChat(`@${cleanTarget}`);
-    toId = chat.id;
-  } catch (err) {
-    return res.json({ 
-      success: false, 
-      error: "Пользователь не найден. Убедитесь, что он писал /start боту" 
-    });
-  }
-
-  try {
-    await bot.sendMessage(toId, "Тест", { disable_notification: true });
-    await bot.deleteMessage(toId, (await bot.sendMessage(toId, "Тест отправки")).message_id);
-  } catch (err) {
-    return res.json({ 
-      success: false, 
-      error: "Бот не может писать этому пользователю" 
-    });
-  }
-
-  const sessionId = `ex_${Date.now()}`;
-  addHistory(fromId, 'exchange', `🔄 Начал обмен с @${cleanTarget}`);
-
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: "✅ Принять", callback_data: `accept_exchange_${sessionId}` },
-        { text: "❌ Отклонить", callback_data: `decline_exchange_${sessionId}` }
-      ]
-    ]
+  avatarEl.src = photoUrl;
+  avatarEl.onerror = () => {
+    avatarEl.src = "https://via.placeholder.com/50/CCCCCC/000?text=👤";
+    console.warn('🖼️ Аватарка не загрузилась, использована заглушка');
   };
+  console.log('🖼️ Аватарка:', photoUrl);
+} else if (avatarEl) {
+  avatarEl.src = "https://via.placeholder.com/50/CCCCCC/000?text=👤";
+}
+
+// === Переключение вкладок ===
+document.querySelectorAll(".tab-btn").forEach(button => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+
+    button.classList.add("active");
+
+    if (button.id === "buy-stars-top") {
+      window.open('https://spend.tg/telegram-stars', '_blank');
+      return;
+    }
+
+    const tabId = button.id.replace("tab-", "");
+    const tab = document.getElementById(tabId);
+    if (tab) {
+      tab.classList.add("active");
+      console.log(`📱 Переключено на вкладку: ${tabId}`);
+    }
+  });
+});
+
+// === Загрузка баланса звёзд ===
+async function loadStars() {
+  if (!starsCount || !user) {
+    console.warn('⚠️ Не могу загрузить баланс: нет starsCount или user');
+    return;
+  }
 
   try {
-    await bot.sendMessage(toId, `📩 *${fromUsername || 'Пользователь'}* предлагает обмен!`, {
-      reply_markup: keyboard,
-      parse_mode: 'Markdown'
-    });
+    const url = `https://bupsiserver.onrender.com/api/stars/${user.id}`;
+    console.log('⬇️ Запрос баланса:', url);
 
-    res.json({ success: true, sessionId });
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Сервер вернул ${res.status}`);
+
+    const data = await res.json();
+    starsCount.textContent = data.stars || 0;
+    console.log('⭐ Баланс загружен:', data.stars);
   } catch (err) {
-    res.json({ success: false, error: "Не удалось отправить приглашение" });
+    console.error('❌ Ошибка загрузки баланса:', err);
+    starsCount.textContent = "—";
   }
-});
+}
+loadStars();
 
-// === Обработка платежей ===
-bot.on('pre_checkout_query', (query) => {
-  bot.answerPreCheckoutQuery(query.id, true);
-});
+// === Кнопка "Начать обмен по username" ===
+if (startExchangeBtn) {
+  if (user) {
+    startExchangeBtn.disabled = false;
+    startExchangeBtn.style.opacity = "1";
+    startExchangeBtn.addEventListener("click", async () => {
+      console.log('🔄 Кнопка "Начать обмен" нажата');
 
-bot.on('successful_payment', async (payment) => {
-  const userId = payment.from.id;
-  const stars = payment.total_amount;
+      const targetUsername = prompt("Введите username пользователя:", "").trim();
+      if (!targetUsername) {
+        tg?.showAlert?.("Введите username");
+        return;
+      }
 
-  let current = userStars.get(userId) || 0;
-  userStars.set(userId, current + stars);
-  addHistory(userId, 'stars_in', `➕ Пополнение: ${stars} ⭐`);
+      try {
+        console.log('📤 Отправка запроса на обмен:', { fromId: user.id, targetUsername });
 
-  await bot.sendMessage(userId, `✅ Вы получили ${stars} ⭐!\n\nБаланс: ${current + stars} ⭐`);
-});
+        const res = await fetch('https://bupsiserver.onrender.com/api/start-exchange-by-username', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fromId: user.id,
+            fromUsername: user.username || `user${user.id}`,
+            targetUsername
+          })
+        });
 
-// === Запуск ===
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Сервер запущен на порту ${PORT}`);
-  console.log(`📌 BOT_TOKEN: ${BOT_TOKEN.substring(0, 10)}...`);
+        const result = await res.json();
+        console.log('📥 Ответ от сервера:', result);
+
+        tg?.showAlert?.(result.success 
+          ? `✅ Запрос отправлен @${targetUsername}` 
+          : `❌ Ошибка: ${result.error}`
+        );
+
+        if (result.success) {
+          console.log(`✅ Приглашение отправлено @${targetUsername}`);
+        }
+      } catch (err) {
+        console.error('❌ Ошибка сети:', err);
+        tg?.showAlert?.("Ошибка сети. Проверьте подключение.");
+      }
+    });
+    console.log('✅ Кнопка обмена: активна');
+  } else {
+    startExchangeBtn.disabled = true;
+    startExchangeBtn.style.opacity = "0.5";
+    startExchangeBtn.textContent = "Обмен: недоступен";
+    console.warn('❌ Кнопка обмена отключена — пользователь не определён');
+  }
+}
+
+// === Вторичные вкладки (в профиле) ===
+document.querySelectorAll(".tabs-secondary button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tabs-secondary button").forEach(b => b.classList.remove("tab-active"));
+    document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+    btn.classList.add("tab-active");
+    document.getElementById(btn.getAttribute("data-tab")).classList.add("active");
+  });
 });
