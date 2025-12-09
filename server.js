@@ -1,38 +1,52 @@
-console.log("✅ BOT_TOKEN:", process.env.BOT_TOKEN);
-console.log("✅ SERVER_URL:", process.env.SERVER_URL);
-
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
+
+// === Парсим JSON и раздаём статику ===
 app.use(express.json());
 app.use(express.static('.'));
 
-// === ТОКЕН БОТА ===
+// === Переменные: BOT_TOKEN и SERVER_URL ===
 const BOT_TOKEN = process.env.BOT_TOKEN || '8212274685:AAEN_jjb3hUnVN9CxdR9lSrG416yQXmk4Tk';
-const bot = new TelegramBot(BOT_TOKEN);
-
-// === URL вашего сервера (обязательно HTTPS!) ===
 const SERVER_URL = process.env.SERVER_URL || 'https://bupsiserver.onrender.com';
+const PORT = process.env.PORT || 3000;
+
+// === Инициализация бота ===
+const bot = new TelegramBot(BOT_TOKEN, { polling: false }); // Webhook, не polling!
+
+// Логи для отладки (можно убрать позже)
+console.log("✅ BOT_TOKEN:", BOT_TOKEN);
+console.log("✅ SERVER_URL:", SERVER_URL);
+console.log("✅ PORT:", PORT);
+
+// === Установка Webhook и обработка обновлений ===
+const webhookUrl = `${SERVER_URL}/${BOT_TOKEN}`;
+
+// Обработка входящих запросов от Telegram
+app.post(`/${BOT_TOKEN}`, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
 
 // Установка Webhook при старте
-app.on('ready', async () => {
-  const webhookUrl = `${SERVER_URL}/${BOT_TOKEN}`;
-  await bot.setWebHook(webhookUrl);
-  console.log(`✅ Webhook установлен: ${webhookUrl}`);
-});
+async function setupWebhook() {
+  try {
+    await bot.setWebHook(webhookUrl);
+    console.log(`✅ Webhook установлен: ${webhookUrl}`);
+  } catch (err) {
+    console.error('❌ Ошибка установки Webhook:', err.message);
+  }
+}
 
 // === ОСНОВНЫЕ МАРШРУТЫ ===
 
-// Проверка сервера
+// Главная страница
 app.get('/', (req, res) => {
   res.send('✅ Сервер работает! BupsiServer активен.');
 });
 
-// Точка, куда Telegram стучится
-app.use(`/${BOT_TOKEN}`, bot.webhookCallback());
-
-// Проверка Webhook (для отладки: /webhook-info)
+// Проверка Webhook (для отладки)
 app.get('/webhook-info', async (req, res) => {
   try {
     const info = await bot.getWebHookInfo();
@@ -75,7 +89,7 @@ bot.onText(/\/start/, (msg) => {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Открыть Mini App", web_app: { url: "https://t.me/bupsibot/app" } }]
+          [{ text: "Открыть App", web_app: { url: "https://t.me/bupsibot/app" } }]
         ]
       }
     });
@@ -225,8 +239,7 @@ app.get('/api/hello/:userId', async (req, res) => {
 });
 
 // === ЗАПУСК СЕРВЕРА ===
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
-  app.emit('ready'); // Запускаем инициализацию Webhook
+  await setupWebhook(); // Устанавливаем Webhook после запуска сервера
 });
