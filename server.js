@@ -16,65 +16,26 @@ const bot = new TelegramBot(BOT_TOKEN, {
   }
 });
 
-// === ХРАНИЛИЩЕ ===
-const userStars = new Map();
-const userHistory = new Map();
-const greetedUsers = new Set(); // Чтобы не спамить приветствиями
+// === ХРАНИЛИЩЕ сессий обмена ===
+const exchangeSessions = new Map(); // sessionId → { fromId, toId, fromUsername, status }
 
-// === CORS ===
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
-  next();
-});
-
-// === Логируем всех, кто пишет боту (включая /start) ===
-bot.on('message', async (msg) => {
-  const { id, first_name, username } = msg.from;
-  console.log(`💬 Сообщение от @${username || 'unknown'} (${id}): ${msg.text}`);
-
-  // Если пользователь написал /start — шлём приветствие
-  if (msg.text === '/start') {
-    const welcomeMsg = `👋 Привет, ${first_name}! Добро пожаловать в *Bupsi*!\n\nТеперь вы можете использовать Mini App и обмениваться подарками.`;
-
-    try {
-      await bot.sendMessage(id, welcomeMsg, { parse_mode: 'Markdown' });
-      greetedUsers.add(id); // Помечаем как поздравленного
-    } catch (err) {
-      console.error(`❌ Не удалось отправить приветствие ${id}:`, err.response?.body);
-    }
-  }
-});
-
-// === API: открытие Mini App — авто-подтверждение диалога ===
+// === Подтверждение диалога ===
 app.get('/api/hello/:userId', async (req, res) => {
   const userId = parseInt(req.params.userId);
-  console.log(`👋 /api/hello: ${userId}`);
-
-  if (greetedUsers.has(userId)) {
-    return res.json({ success: true, message: "Уже приветствовали" });
-  }
-
   try {
-    await bot.sendMessage(userId, `✅ Добро пожаловать! Диалог подтверждён — вы можете использовать обмен.`, {
-      parse_mode: 'Markdown'
-    });
-    greetedUsers.add(userId);
+    await bot.sendMessage(userId, `✅ Диалог с ботом подтверждён.`, { parse_mode: 'Markdown' });
     res.json({ success: true });
   } catch (err) {
-    console.error(`❌ Не могу писать пользователю ${userId}:`, err.response?.body);
-    res.json({ success: false, error: "Пользователь не начал диалог. Напишите /start боту." });
+    res.json({ success: false, error: "Напишите /start боту" });
   }
 });
 
-// === API: баланс ===
+// === API: баланс звёзд ===
 app.get('/api/stars/:userId', (req, res) => {
-  const stars = userStars.get(parseInt(req.params.userId)) || 0;
-  res.json({ stars });
+  res.json({ stars: 0 }); // заглушка
 });
 
-// === API: обмен по username ===
+// === API: начать обмен ===
 app.post('/api/start-exchange-by-username', async (req, res) => {
   const { fromId, fromUsername, targetUsername } = req.body;
   const cleanTarget = targetUsername.replace(/^@/, '').toLowerCase();
@@ -90,38 +51,90 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     });
   }
 
+  // Проверим, может ли бот писать
   try {
     await bot.sendMessage(toId, "Тест", { disable_notification: true });
     await bot.deleteMessage(toId, (await bot.sendMessage(toId, "Тест отправки")).message_id);
   } catch (err) {
     return res.json({ 
       success: false, 
-      error: "Бот не может писать этому пользователю. Напишите /start в боте." 
+      error: "Бот не может писать этому пользователю. Пусть напишет /start" 
     });
   }
 
+  // Генерация ID сессии
+  const sessionId = `ex_${Date.now()}_${fromId}`;
+  exchangeSessions.set(sessionId, {
+    fromId,
+    toId,
+    fromUsername: fromUsername || `user${fromId}`,
+    status: 'pending'
+  });
+
+  // Кнопки под сообщением
   const keyboard = {
     inline_keyboard: [
       [
-        { text: "✅ Принять", callback_data: `accept_exchange_${fromId}` },
-        { text: "❌ Отклонить", callback_data: `decline_exchange_${fromId}` }
+        {
+          text: "✅ Принять",
+          web_app: { url: `https://bupsiapp.vercel.app?exchange_id=${sessionId}` }
+        },
+        {
+          text: "❌ Отклонить",
+          callback_data: `decline_exchange_${sessionId}`
+        }
       ]
     ]
   };
 
+  // Отправляем сообщение
   try {
-    await bot.sendMessage(toId, `📩 *${fromUsername || 'Пользователь'}* предлагает обмен!`, {
+    await bot.sendMessage(toId, `📩 У вас новое предложение на обмен от *${fromUsername || 'Пользователь'}*`, {
       reply_markup: keyboard,
       parse_mode: 'Markdown'
     });
 
-    res.json({ success: true });
+    res.json({ success: true, sessionId });
   } catch (err) {
+    console.error("❌ Ошибка отправки:", err);
     res.json({ success: false, error: "Не удалось отправить приглашение" });
   }
 });
 
-// === Запуск ===
+// === Обработка нажатия "Отклонить" ===
+bot.on('callback_query', async (query) => {
+  const data = query.data;
+  if (data.startsWith('decline_exchange_')) {
+    const sessionId = data.split('_').slice(3).join('_');
+    const session = exchangeSessions.get(sessionId);
+
+    if (!session) {
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+
+    // Удаляем сессию
+    exchangeSessions.delete(sessionId);
+
+    // Уведомляем инициатора
+    try {
+      await bot.sendMessage(session.fromId, `❌ *${session.fromUsername}* отказался от обмена.`, {
+        parse_mode: 'Markdown'
+      });
+    } catch (err) {
+      console.error(`❌ Не могу уведомить инициатора ${session.fromId}`);
+    }
+
+    // Подтверждаем и редактируем сообщение
+    await bot.answerCallbackQuery(query.id, { text: 'Вы отклонили обмен' });
+    await bot.editMessageText('❌ Вы отклонили обмен.', {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id
+    });
+  }
+});
+
+// === Запуск сервера ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
