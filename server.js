@@ -3,20 +3,31 @@ const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
 
-// === Парсим JSON и CORS ===
+// === Парсим JSON ===
 app.use(express.json());
 
-// === CORS для Telegram Mini Apps ===
+// === CORS: разрешаем Telegram и твой Vercel-фронтенд ===
+const allowedOrigins = [
+  'https://t.me',
+  'https://web.telegram.org',
+  'https://bupsiapp.vercel.app' // ← Твой фронтенд
+];
+
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', 'https://t.me');
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
   next();
 });
 
+// Раздаём статику (вдруг понадобится)
 app.use(express.static('.'));
 
 // === Переменные ===
@@ -100,6 +111,7 @@ const users = new Map();
 const exchanges = new Map();
 const history = [];
 
+// Для теста: добавим пользователя
 users.set(123456789, { stars: 100, username: 'testuser' });
 
 // === API: Баланс ===
@@ -124,8 +136,8 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     return res.json({ success: false, error: "Недостаточно данных" });
   }
 
-  // Заглушка: toId — это ты (чтобы тестировать)
-  const toId = 123456789; // ← ЗАМЕНИ НА СВОЙ ID, если нужно
+  // Заглушка: toId — тестовый пользователь
+  const toId = 123456789; // ← Замени на свой ID, если нужно
   let toUser = users.get(toId);
   if (!toUser) {
     toUser = { stars: 50, username: targetUsername };
@@ -144,7 +156,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
   });
 
   try {
- await bot.sendMessage(toId, `
+    await bot.sendMessage(toId, `
 🔄 Запрос на обмен!
 
 От: @${fromUsername}
@@ -154,7 +166,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     `, {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Принять обмен", web_app: { url: `https://t.me/bupsibot/app?startapp=${sessionId}` } }]
+          [{ text: "Принять обмен", web_app: { url: `https://t.me/bupsibot/app?startapp=exchange_${sessionId}` } }]
         ]
       }
     });
@@ -241,7 +253,7 @@ app.get('/api/hello/:userId', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
 
-  // ДАЁМ ВРЕМЯ СЕРВЕРУ ЗАГРУЗИТЬСЯ
+  // Ждём 3 секунды — чтобы сервер точно стал доступен
   setTimeout(async () => {
     try {
       await bot.setWebHook(webhookUrl);
