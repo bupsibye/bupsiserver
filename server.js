@@ -81,7 +81,7 @@ bot.onText(/\/start/, (msg) => {
     `, {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Открыть App", web_app: { url: "https://t.me/bupsibot/app" } }]
+          [{ text: "Открыть App", web_app: { url: "https://t.me/knoxway_bot/app" } }]
         ]
       }
     });
@@ -99,7 +99,7 @@ bot.onText(/\/start/, (msg) => {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Открыть App", web_app: { url: "https://t.me/bupsibot/app" } }]
+          [{ text: "Открыть App", web_app: { url: "https://t.me/knoxway_bot/app" } }]
         ]
       }
     });
@@ -166,7 +166,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     `, {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Принять обмен", web_app: { url: `https://t.me/bupsibot/app?startapp=exchange_${sessionId}` } }]
+          [{ text: "Принять обмен", web_app: { url: `https://t.me/knoxway_bot/app?startapp=exchange_${sessionId}` } }]
         ]
       }
     });
