@@ -1,3 +1,6 @@
+console.log("✅ BOT_TOKEN:", process.env.BOT_TOKEN);
+console.log("✅ SERVER_URL:", process.env.SERVER_URL);
+
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 
