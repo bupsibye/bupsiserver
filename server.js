@@ -16,125 +16,41 @@ const bot = new TelegramBot(BOT_TOKEN, {
   }
 });
 
-// === ХРАНИЛИЩЕ сессий обмена ===
-const exchangeSessions = new Map(); // sessionId → { fromId, toId, fromUsername, status }
+// === Простое API для проверки ===
+app.get('/', (req, res) => {
+  res.send('✅ Сервер работает! Используй /api/test');
+});
+
+app.get('/api/test', (req, res) => {
+  res.json({ success: true, message: "API живо" });
+});
 
 // === Подтверждение диалога ===
 app.get('/api/hello/:userId', async (req, res) => {
   const userId = parseInt(req.params.userId);
   try {
-    await bot.sendMessage(userId, `✅ Диалог с ботом подтверждён.`, { parse_mode: 'Markdown' });
+    await bot.sendMessage(userId, "✅ Диалог подтверждён", { parse_mode: 'Markdown' });
     res.json({ success: true });
   } catch (err) {
     res.json({ success: false, error: "Напишите /start боту" });
   }
 });
 
-// === API: баланс звёзд ===
+// === API: баланс ===
 app.get('/api/stars/:userId', (req, res) => {
-  res.json({ stars: 0 }); // заглушка
+  res.json({ stars: 0 });
 });
 
-// === API: начать обмен ===
+// === API: начать обмен (заглушка) ===
 app.post('/api/start-exchange-by-username', async (req, res) => {
   const { fromId, fromUsername, targetUsername } = req.body;
-  const cleanTarget = targetUsername.replace(/^@/, '').toLowerCase();
+  console.log('🔄 Обмен:', { fromId, fromUsername, targetUsername });
 
-  let toId;
-  try {
-    const chat = await bot.getChat(`@${cleanTarget}`);
-    toId = chat.id;
-  } catch (err) {
-    return res.json({ 
-      success: false, 
-      error: "Пользователь не найден. Убедитесь, что он писал /start боту" 
-    });
-  }
-
-  // Проверим, может ли бот писать
-  try {
-    await bot.sendMessage(toId, "Тест", { disable_notification: true });
-    await bot.deleteMessage(toId, (await bot.sendMessage(toId, "Тест отправки")).message_id);
-  } catch (err) {
-    return res.json({ 
-      success: false, 
-      error: "Бот не может писать этому пользователю. Пусть напишет /start" 
-    });
-  }
-
-  // Генерация ID сессии
-  const sessionId = `ex_${Date.now()}_${fromId}`;
-  exchangeSessions.set(sessionId, {
-    fromId,
-    toId,
-    fromUsername: fromUsername || `user${fromId}`,
-    status: 'pending'
-  });
-
-  // Кнопки под сообщением
-  const keyboard = {
-    inline_keyboard: [
-      [
-        {
-          text: "✅ Принять",
-          web_app: { url: `https://bupsiapp.vercel.app?exchange_id=${sessionId}` }
-        },
-        {
-          text: "❌ Отклонить",
-          callback_data: `decline_exchange_${sessionId}`
-        }
-      ]
-    ]
-  };
-
-  // Отправляем сообщение
-  try {
-    await bot.sendMessage(toId, `📩 У вас новое предложение на обмен от *${fromUsername || 'Пользователь'}*`, {
-      reply_markup: keyboard,
-      parse_mode: 'Markdown'
-    });
-
-    res.json({ success: true, sessionId });
-  } catch (err) {
-    console.error("❌ Ошибка отправки:", err);
-    res.json({ success: false, error: "Не удалось отправить приглашение" });
-  }
+  // Имитация успешного ответа
+  res.json({ success: true, sessionId: 'test_session_123' });
 });
 
-// === Обработка нажатия "Отклонить" ===
-bot.on('callback_query', async (query) => {
-  const data = query.data;
-  if (data.startsWith('decline_exchange_')) {
-    const sessionId = data.split('_').slice(3).join('_');
-    const session = exchangeSessions.get(sessionId);
-
-    if (!session) {
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    // Удаляем сессию
-    exchangeSessions.delete(sessionId);
-
-    // Уведомляем инициатора
-    try {
-      await bot.sendMessage(session.fromId, `❌ *${session.fromUsername}* отказался от обмена.`, {
-        parse_mode: 'Markdown'
-      });
-    } catch (err) {
-      console.error(`❌ Не могу уведомить инициатора ${session.fromId}`);
-    }
-
-    // Подтверждаем и редактируем сообщение
-    await bot.answerCallbackQuery(query.id, { text: 'Вы отклонили обмен' });
-    await bot.editMessageText('❌ Вы отклонили обмен.', {
-      chat_id: query.message.chat.id,
-      message_id: query.message.message_id
-    });
-  }
-});
-
-// === Запуск сервера ===
+// === Запуск ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
