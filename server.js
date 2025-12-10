@@ -12,8 +12,9 @@ const WEB_APP_URL = 'https://bupsiapp.vercel.app';
 // === БОТ ===
 const bot = new TelegramBot(BOT_TOKEN, { polling: false });
 
-// === ХРАНИЛИЩЕ сессий ===
+// === ХРАНИЛИЩЕ ===
 const exchangeSessions = new Map(); // sessionId → { fromId, fromUsername, targetUsername }
+const userCache = new Map();        // username → chatId
 
 // === УСТАНОВКА ВЕБХУКА ===
 app.get('/set-webhook', async (req, res) => {
@@ -23,23 +24,28 @@ app.get('/set-webhook', async (req, res) => {
     res.send(`
       <h1>✅ Вебхук установлен!</h1>
       <p><code>${url}</code></p>
-      <p>Напиши /start в <a href="https://t.me/bupsibot">@bupsibot</a></p>
+      <p>Напишите /start в <a href="https://t.me/bupsibot">@bupsibot</a></p>
     `);
   } catch (err) {
     res.status(500).send(`❌ Ошибка: ${err.message}`);
   }
 });
 
-// === Telegram шлёт сюда обновления ===
 app.post(`/bot${BOT_TOKEN}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
-// === /start — с кнопкой Mini App ===
+// === /start — сохраняем username и chatId ===
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const firstName = msg.from.first_name;
+  const username = msg.from.username;
+
+  // Сохраняем в кэш
+  if (username) {
+    userCache.set(username.toLowerCase(), chatId);
+  }
 
   const keyboard = {
     inline_keyboard: [[{
@@ -65,14 +71,13 @@ bot.onText(/\/start/, (msg) => {
 });
 
 // === API: начать обмен по username ===
-app.post('/api/start-exchange-by-username', (req, res) => {
+app.post('/api/start-exchange-by-username', async (req, res) => {
   const { fromId, fromUsername, targetUsername } = req.body;
 
   if (!fromId || !fromUsername || !targetUsername) {
     return res.json({ success: false, error: 'Не хватает данных' });
   }
 
-  // Генерируем сессию, но НЕ пытаемся найти пользователя
   const sessionId = `ex_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
   exchangeSessions.set(sessionId, {
     fromId: Number(fromId),
@@ -81,14 +86,75 @@ app.post('/api/start-exchange-by-username', (req, res) => {
     status: 'pending'
   });
 
-  // Возвращаем ссылку для ручной отправки
-  const exchangeLink = `${WEB_APP_URL}?startapp=exchange_${sessionId}`;
+  // Ищем получателя по username
+  const toChatId = userCache.get(targetUsername.toLowerCase());
 
-  res.json({
-    success: true,
-    message: `Скопируйте и отправьте эту ссылку @${targetUsername} вручную:`,
-    link: exchangeLink
-  });
+  if (!toChatId) {
+    return res.json({
+      success: false,
+      error: `Пользователь @${targetUsername} не найден. Он должен был написать боту /start`
+    });
+  }
+
+  try {
+    const keyboard = {
+      inline_keyboard: [[
+        {
+          text: '✅ Принять',
+          web_app: { url: `${WEB_APP_URL}?startapp=exchange_${sessionId}` }
+        },
+        {
+          text: '❌ Отклонить',
+          callback_data: `decline_${sessionId}`
+        }
+      ]]
+    };
+
+    const message = `
+🔄 *Запрос на обмен!*
+
+От: @${fromUsername}
+Предлагает начать обмен подарками
+
+👉 Примите или отклоните:
+    `.trim();
+
+    await bot.sendMessage(toChatId, message, {
+      reply_markup: keyboard,
+      parse_mode: 'Markdown'
+    });
+
+    res.json({ success: true, message: `Запрос отправлен @${targetUsername}` });
+  } catch (err) {
+    console.error('❌ Ошибка отправки:', err);
+    res.json({ success: false, error: 'Не удалось отправить сообщение' });
+  }
+});
+
+// === Обработка: отклонение ===
+bot.on('callback_query', async (query) => {
+  const data = query.data;
+  if (!data.startsWith('decline_')) return;
+
+  const sessionId = data.split('_')[1];
+  const session = exchangeSessions.get(sessionId);
+
+  if (session) {
+    exchangeSessions.delete(sessionId);
+
+    await bot.editMessageText('❌ Вы отклонили запрос на обмен.', {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id
+    });
+
+    try {
+      await bot.sendMessage(session.fromId, `❌ @${session.targetUsername} отказался от вашего предложения обмена`);
+    } catch (err) {
+      console.error('Не удалось уведомить инициатора:', err);
+    }
+
+    await bot.answerCallbackQuery(query.id, { text: 'Отклонено' });
+  }
 });
 
 // === API: принять обмен (заглушка) ===
@@ -114,7 +180,7 @@ app.get('/', (req, res) => {
   res.send(`
     <h1>🚀 Bupsi Server — работает</h1>
     <p><a href="/set-webhook">🔧 Установить вебхук</a></p>
-    <p>Mini App: <a href="${WEB_APP_URL}" target="_blank">Открыть</a></p>
+    <p>Пользователей в кэше: ${userCache.size}</p>
   `);
 });
 
