@@ -61,34 +61,31 @@ bot.onText(/\/start/, (msg) => {
   }).catch(console.error);
 });
 
-// === ХРАНИЛИЩЕ ===
+// === ХРАНИЛИЩЕ запросов на обмен ===
 const exchangeRequests = new Map(); // fromId -> toId
-const exchangeSessions = new Map(); // sessionId -> { fromId, toId, fromGiftId, toGiftId, fromConfirmed, toConfirmed }
 
-// ✅ РОУТ: Начать обмен
-app.post('/api/start-exchange', async (req, res) => {
-  const { fromId, toUsername, fromUsername } = req.body;
+// ✅ РОУТ: /api/start-exchange-by-username — ИМЕННО ЭТОТ, КАК В script.js
+app.post('/api/start-exchange-by-username', async (req, res) => {
+  const { fromId, fromUsername, targetUsername } = req.body;
 
-  if (!fromId || !toUsername) {
-    return res.json({ success: false, error: 'Не хватает fromId или toUsername' });
+  if (!fromId || !targetUsername) {
+    return res.json({ success: false, error: 'Не хватает fromId или targetUsername' });
   }
 
   try {
-    const chat = await bot.getChat(`@${toUsername}`);
+    // Получаем ID получателя по username
+    const chat = await bot.getChat(`@${targetUsername}`);
     const toId = chat.id;
 
     // Сохраняем запрос
     exchangeRequests.set(`${fromId}->${toId}`, { fromId, toId, fromUsername });
 
-    // Уникальный ID сессии
-    const sessionId = `exchange_${fromId}`;
-
-    // Кнопки
+    // Кнопки: принять / отклонить
     const keyboard = {
       inline_keyboard: [[
         {
           text: '✅ Принять',
-          web_app: { url: `https://bupsiapp.vercel.app/exchange.html?startapp=${sessionId}` }
+          web_app: { url: `https://bupsiapp.vercel.app?exchange_id=1&start_param=exchange_${fromId}` }
         },
         {
           text: '❌ Отклонить',
@@ -113,64 +110,12 @@ app.post('/api/start-exchange', async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
+    console.error('❌ Ошибка отправки:', err);
     res.json({
       success: false,
       error: err.response?.body?.description || 'Пользователь не найден или не писал боту'
     });
   }
-});
-
-// === API: Получить сессию ===
-app.get('/api/session/:sessionId', (req, res) => {
-  const { sessionId } = req.params;
-  const session = exchangeSessions.get(sessionId);
-  if (!session) {
-    return res.json({ error: 'Сессия не найдена' });
-  }
-  res.json(session);
-});
-
-// === API: Выбрать подарок ===
-app.post('/api/exchange/select-gift', (req, res) => {
-  const { sessionId, userId, giftId } = req.body;
-  const session = exchangeSessions.get(sessionId);
-  if (!session) {
-    return res.json({ error: 'Сессия не найдена' });
-  }
-
-  if (session.fromId === userId) {
-    session.fromGiftId = giftId;
-  } else if (session.toId === userId) {
-    session.toGiftId = giftId;
-  }
-
-  exchangeSessions.set(sessionId, session);
-  res.json({ success: true });
-});
-
-// === API: Подтвердить обмен ===
-app.post('/api/confirm-exchange', (req, res) => {
-  const { sessionId, userId } = req.body;
-  const session = exchangeSessions.get(sessionId);
-  if (!session) {
-    return res.json({ error: 'Сессия не найдена' });
-  }
-
-  if (session.fromId === userId) {
-    session.fromConfirmed = true;
-  } else if (session.toId === userId) {
-    session.toConfirmed = true;
-  }
-
-  exchangeSessions.set(sessionId, session);
-
-  // Если оба подтвердили — можно отправить подарки
-  if (session.fromConfirmed && session.toConfirmed) {
-    bot.sendMessage(session.fromId, `✅ Обмен завершён! Вы получили подарок.`).catch(console.error);
-    bot.sendMessage(session.toId, `✅ Обмен завершён! Вы получили подарок.`).catch(console.error);
-  }
-
-  res.json({ success: true });
 });
 
 // === Обработка отклонения ===
@@ -191,7 +136,7 @@ bot.on('callback_query', async (query) => {
   try {
     await bot.sendMessage(fromId, `❌ @${username} отказался от вашего предложения обмена`);
   } catch (err) {
-    console.error('Ошибка уведомления:', err);
+    console.error('Не удалось уведомить инициатора:', err);
   }
 
   await bot.answerCallbackQuery(query.id, { text: 'Вы отклонили запрос' });
