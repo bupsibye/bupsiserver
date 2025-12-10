@@ -22,28 +22,23 @@ app.get('/set-webhook', async (req, res) => {
   `);
 });
 
-// ВАЖНО: Telegram шлёт сюда данные
+// ВАЖНО: Telegram шлёт сюда обновления
 app.post(`/bot${BOT_TOKEN}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
-// ✅ ОБРАБОТКА /start — ПОЛНОЕ ВОССТАНОВЛЕНИЕ СТАРОГО СООБЩЕНИЯ
+// ✅ ОБРАБОТКА /start — СОХРАНЯЕМ СТАРЫЙ ТЕКСТ
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const username = msg.from.username ? `@${msg.from.username}` : 'друг';
   const firstName = msg.from.first_name;
 
-  const webAppUrl = 'https://bupsiapp.vercel.app'; // ← твой Mini App
+  const webAppUrl = 'https://bupsiapp.vercel.app';
 
   const keyboard = {
     inline_keyboard: [
-      [
-        {
-          text: '🎁 Открыть Knox Market',
-          web_app: { url: webAppUrl }
-        }
-      ]
+      [{ text: '🎁 Открыть Knox Market', web_app: { url: webAppUrl } }]
     ]
   };
 
@@ -61,21 +56,22 @@ bot.onText(/\/start/, (msg) => {
   bot.sendMessage(chatId, message, {
     reply_markup: keyboard,
     parse_mode: 'Markdown'
-  }).catch(err => {
-    console.error('❌ Ошибка /start:', err);
-  });
+  }).catch(console.error);
 });
 
-// === ХРАНИЛИЩЕ для обмена ===
-const exchangeRequests = new Map(); // fromId → { toId, fromUsername }
+// === ХРАНИЛИЩЕ запросов ===
+const exchangeRequests = new Map(); // fromId -> { toId, fromUsername }
 
-// === API: Начать обмен по username ===
+// ✅ РОУТ: Начать обмен — /api/start-exchange
 app.post('/api/start-exchange', async (req, res) => {
-  const { fromId, toUsername } = req.body;
-  const fromUsername = req.body.fromUsername || 'друг';
+  const { fromId, toUsername, fromUsername } = req.body;
+
+  if (!fromId || !toUsername) {
+    return res.json({ success: false, error: 'Не хватает данных' });
+  }
 
   try {
-    // Получаем информацию о пользователе
+    // Получаем чат по username
     const chat = await bot.getChat(`@${toUsername}`);
     const toId = chat.id;
 
@@ -112,9 +108,9 @@ app.post('/api/start-exchange', async (req, res) => {
       parse_mode: 'Markdown'
     });
 
-    res.json({ success: true, message: 'Приглашение отправлено' });
+    res.json({ success: true });
   } catch (err) {
-    console.error('❌ Ошибка отправки:', err);
+    console.error('❌ Ошибка отправки запроса:', err);
     res.json({
       success: false,
       error: err.response?.body?.description || 'Пользователь не найден или не писал боту'
@@ -126,10 +122,10 @@ app.post('/api/start-exchange', async (req, res) => {
 bot.on('callback_query', async (query) => {
   const data = query.data;
   const chatId = query.message.chat.id;
-  const username = query.from.username || 'пользователь';
 
   if (data.startsWith('decline_')) {
     const [, fromId, toId] = data.split('_');
+    const username = query.from.username || 'пользователь';
 
     // Удаляем запрос
     exchangeRequests.delete(`${fromId}->${toId}`);
