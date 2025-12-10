@@ -13,8 +13,8 @@ const WEB_APP_URL = 'https://bupsiapp.vercel.app';
 const bot = new TelegramBot(BOT_TOKEN, { polling: false });
 
 // === ХРАНИЛИЩЕ ===
-const exchangeSessions = new Map(); // sessionId → { fromId, fromUsername, targetUsername }
-const userCache = new Map();        // username → chatId
+const exchangeSessions = new Map();
+const userCache = new Map();
 
 // === УСТАНОВКА ВЕБХУКА ===
 app.get('/set-webhook', async (req, res) => {
@@ -27,6 +27,7 @@ app.get('/set-webhook', async (req, res) => {
       <p>Откройте: <a href="https://t.me/knoxway_bot">@knoxway_bot</a></p>
     `);
   } catch (err) {
+    console.error('❌ Ошибка вебхука:', err);
     res.status(500).send(`❌ Ошибка: ${err.message}`);
   }
 });
@@ -40,10 +41,13 @@ app.post(`/bot${BOT_TOKEN}`, (req, res) => {
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const firstName = msg.from.first_name;
-  const username = msg.from.username;
+  const username = msg.from.username?.toLowerCase();
 
   if (username) {
-    userCache.set(username.toLowerCase(), chatId);
+    userCache.set(username, chatId);
+    console.log(`✅ /start: @${username} → ${chatId}`);
+  } else {
+    console.log(`⚠️ /start: @unknown (ID: ${chatId}) — username не указан`);
   }
 
   const keyboard = {
@@ -56,28 +60,46 @@ bot.onText(/\/start/, (msg) => {
   const message = `
 👋 Привет, ${firstName}! Добро пожаловать в Knox Market!
 
-Здесь ты можешь:
-- 💬 Обмениваться ⭐ с друзьями
-- 🎁 Покупать и дарить подарки
-
 Нажми кнопку ниже, чтобы начать:
   `.trim();
 
   bot.sendMessage(chatId, message, {
     reply_markup: keyboard,
     parse_mode: 'Markdown'
-  }).catch(console.error);
+  }).catch(err => {
+    console.error(`❌ Ошибка отправки /start ${chatId}:`, err.response?.body);
+  });
 });
 
 // === API: начать обмен по username ===
 app.post('/api/start-exchange-by-username', async (req, res) => {
-  const { fromId, fromUsername, targetUsername } = req.body;
+  const { fromId, fromUsername, targetUsername: rawTarget } = req.body;
 
-  if (!fromId || !fromUsername || !targetUsername) {
+  // Логируем всё
+  console.log('📩 /api/start-exchange-by-username:', { fromId, fromUsername, rawTarget });
+
+  if (!fromId || !fromUsername || !rawTarget) {
+    console.log('❌ Не хватает данных');
     return res.json({ success: false, error: 'Не хватает данных' });
   }
 
-  // Генерируем сессию
+  const targetUsername = rawTarget.trim().toLowerCase();
+
+  console.log('🔍 Поиск: @' + targetUsername);
+  console.log('💾 В кэше:', Array.from(userCache.keys()));
+
+  const toChatId = userCache.get(targetUsername);
+
+  if (!toChatId) {
+    console.log('❌ Пользователь @' + targetUsername + ' не найден');
+    return res.json({
+      success: false,
+      error: `Пользователь @${targetUsername} не найден. Он должен был написать боту /start`
+    });
+  }
+
+  console.log(`✅ Найден: @${targetUsername} → chat_id: ${toChatId}`);
+
   const sessionId = `ex_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
   exchangeSessions.set(sessionId, {
     fromId: Number(fromId),
@@ -85,16 +107,6 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     targetUsername,
     status: 'pending'
   });
-
-  // Ищем получателя
-  const toChatId = userCache.get(targetUsername.toLowerCase());
-
-  if (!toChatId) {
-    return res.json({
-      success: false,
-      error: `Пользователь @${targetUsername} не найден. Он должен был написать боту /start`
-    });
-  }
 
   try {
     const message = `
@@ -123,14 +135,15 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
       parse_mode: 'Markdown'
     });
 
+    console.log(`✅ Сообщение отправлено: @${targetUsername}`);
     res.json({ success: true, message: `Запрос отправлен @${targetUsername}` });
   } catch (err) {
-    console.error('❌ Ошибка отправки:', err);
+    console.error('❌ Ошибка отправки:', err.response?.body || err.message);
     res.json({ success: false, error: 'Не удалось отправить сообщение' });
   }
 });
 
-// === Обработка: отказ от обмена ===
+// === Обработка: отказ ===
 bot.on('callback_query', async (query) => {
   const data = query.data;
   if (!data.startsWith('decline_')) return;
@@ -141,19 +154,18 @@ bot.on('callback_query', async (query) => {
   if (session) {
     exchangeSessions.delete(sessionId);
 
-    // Редактируем сообщение
     await bot.editMessageText('❌ Вы отклонили запрос на обмен.', {
       chat_id: query.message.chat.id,
       message_id: query.message.message_id
     });
 
-    // Уведомляем инициатора
     try {
       await bot.sendMessage(session.fromId, `
 ❌ *@${session.targetUsername}* отказался от вашего предложения обмена.
       `.trim(), {
         parse_mode: 'Markdown'
       });
+      console.log(`📨 Уведомление отправлено инициатору: @${session.fromUsername}`);
     } catch (err) {
       console.error('❌ Не удалось уведомить инициатора:', err);
     }
@@ -162,7 +174,7 @@ bot.on('callback_query', async (query) => {
   }
 });
 
-// === API: принять обмен (заглушка) ===
+// === API: принять обмен ===
 app.post('/api/accept-exchange/:sessionId', (req, res) => {
   const { sessionId } = req.params;
   const session = exchangeSessions.get(sessionId);
