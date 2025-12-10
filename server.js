@@ -2,7 +2,7 @@ const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
-app.use(express.json()); // ❌ Не bodyParser, а express.json()
+app.use(express.json());
 
 // === НАСТРОЙКИ ===
 const BOT_TOKEN = '8212274685:AAEN_jjb3hUnVN9CxdR9lSrG416yQXmk4Tk';
@@ -13,29 +13,33 @@ const WEB_APP_URL = 'https://bupsiapp.vercel.app';
 const bot = new TelegramBot(BOT_TOKEN, { polling: false });
 
 // === ХРАНИЛИЩЕ сессий ===
-const exchangeSessions = new Map();
+const exchangeSessions = new Map(); // sessionId → { fromId, fromUsername, targetUsername }
 
 // === УСТАНОВКА ВЕБХУКА ===
 app.get('/set-webhook', async (req, res) => {
   const url = `${WEBHOOK_URL}/bot${BOT_TOKEN}`;
-  await bot.setWebHook(url);
-  res.send(`
-    <h1>✅ Вебхук установлен!</h1>
-    <p><code>${url}</code></p>
-    <p>Напиши /start в боте.</p>
-  `);
+  try {
+    await bot.setWebHook(url);
+    res.send(`
+      <h1>✅ Вебхук установлен!</h1>
+      <p><code>${url}</code></p>
+      <p>Напиши /start в <a href="https://t.me/bupsibot">@bupsibot</a></p>
+    `);
+  } catch (err) {
+    res.status(500).send(`❌ Ошибка: ${err.message}`);
+  }
 });
 
+// === Telegram шлёт сюда обновления ===
 app.post(`/bot${BOT_TOKEN}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
-// === /start ===
+// === /start — с кнопкой Mini App ===
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const firstName = msg.from.first_name;
-  const username = msg.from.username ? `@${msg.from.username}` : 'друг';
 
   const keyboard = {
     inline_keyboard: [[{
@@ -51,7 +55,7 @@ bot.onText(/\/start/, (msg) => {
 - 💬 Обмениваться ⭐ с друзьями
 - 🎁 Покупать и дарить подарки
 
-Нажми кнопку ниже:
+Нажми кнопку ниже, чтобы начать:
   `.trim();
 
   bot.sendMessage(chatId, message, {
@@ -61,13 +65,14 @@ bot.onText(/\/start/, (msg) => {
 });
 
 // === API: начать обмен по username ===
-app.post('/api/start-exchange-by-username', async (req, res) => {
+app.post('/api/start-exchange-by-username', (req, res) => {
   const { fromId, fromUsername, targetUsername } = req.body;
 
   if (!fromId || !fromUsername || !targetUsername) {
     return res.json({ success: false, error: 'Не хватает данных' });
   }
 
+  // Генерируем сессию, но НЕ пытаемся найти пользователя
   const sessionId = `ex_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
   exchangeSessions.set(sessionId, {
     fromId: Number(fromId),
@@ -76,78 +81,14 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     status: 'pending'
   });
 
-  try {
-    // Ищем пользователя среди тех, кто писал боту
-    const updates = await bot.getUpdates();
-    const targetUser = updates
-      .map(u => u.message?.from || u.callback_query?.from)
-      .find(u => u && u.username?.toLowerCase() === targetUsername.toLowerCase());
+  // Возвращаем ссылку для ручной отправки
+  const exchangeLink = `${WEB_APP_URL}?startapp=exchange_${sessionId}`;
 
-    if (!targetUser) {
-      return res.json({
-        success: false,
-        error: `@${targetUsername} не найден. Он должен был начать диалог с ботом.`
-      });
-    }
-
-    const keyboard = {
-      inline_keyboard: [[
-        {
-          text: '✅ Принять',
-          web_app: { url: `${WEB_APP_URL}?startapp=exchange_${sessionId}` }
-        },
-        {
-          text: '❌ Отклонить',
-          callback_data: `decline_${sessionId}`
-        }
-      ]]
-    };
-
-    const message = `
-🔄 *Запрос на обмен!*
-
-От: @${fromUsername}
-Предлагает начать обмен подарками
-
-👉 Примите или отклоните:
-    `.trim();
-
-    await bot.sendMessage(targetUser.id, message, {
-      reply_markup: keyboard,
-      parse_mode: 'Markdown'
-    });
-
-    res.json({ success: true, message: `Запрос отправлен @${targetUsername}` });
-  } catch (err) {
-    console.error('❌ Ошибка:', err);
-    res.json({ success: false, error: 'Не удалось отправить запрос' });
-  }
-});
-
-// === Обработка: отклонение ===
-bot.on('callback_query', async (query) => {
-  const data = query.data;
-  if (!data.startsWith('decline_')) return;
-
-  const sessionId = data.split('_')[1];
-  const session = exchangeSessions.get(sessionId);
-
-  if (session) {
-    exchangeSessions.delete(sessionId);
-
-    await bot.editMessageText('❌ Вы отклонили запрос.', {
-      chat_id: query.message.chat.id,
-      message_id: query.message.message_id
-    });
-
-    try {
-      await bot.sendMessage(session.fromId, `❌ @${session.targetUsername} отказался от вашего предложения.`);
-    } catch (err) {
-      console.error('Не удалось уведомить инициатора:', err);
-    }
-
-    await bot.answerCallbackQuery(query.id, { text: 'Отклонено' });
-  }
+  res.json({
+    success: true,
+    message: `Скопируйте и отправьте эту ссылку @${targetUsername} вручную:`,
+    link: exchangeLink
+  });
 });
 
 // === API: принять обмен (заглушка) ===
@@ -164,13 +105,17 @@ app.post('/api/accept-exchange/:sessionId', (req, res) => {
   res.json({
     success: true,
     stars: 50,
-    message: `Вы получили 50 ⭐`
+    message: `Вы получили 50 ⭐ от @${session.fromUsername}`
   });
 });
 
-// === Главная ===
+// === Главная страница ===
 app.get('/', (req, res) => {
-  res.send('<h1>🚀 Bupsi Server — работает</h1><p><a href="/set-webhook">🔧 Установить вебхук</a></p>');
+  res.send(`
+    <h1>🚀 Bupsi Server — работает</h1>
+    <p><a href="/set-webhook">🔧 Установить вебхук</a></p>
+    <p>Mini App: <a href="${WEB_APP_URL}" target="_blank">Открыть</a></p>
+  `);
 });
 
 // === Запуск ===
