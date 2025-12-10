@@ -23,13 +23,13 @@ app.get('/set-webhook', async (req, res) => {
   `);
 });
 
-// === Важно: Telegram шлёт сюда обновления ===
+// === Telegram шлёт сюда обновления ===
 app.post(`/bot${BOT_TOKEN}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
-// === /start с кнопкой ===
+// === /start — с кнопкой Mini App ===
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const firstName = msg.from.first_name;
@@ -61,26 +61,26 @@ bot.onText(/\/start/, (msg) => {
   }).catch(console.error);
 });
 
-// === ХРАНИЛИЩЕ ОБМЕНОВ ===
+// === ХРАНИЛИЩЕ запросов на обмен ===
 const exchangeRequests = new Map();
 
-// ✅ РОУТ: /api/start-exchange
+// ✅ РОУТ: /api/start-exchange (POST)
 app.post('/api/start-exchange', async (req, res) => {
   const { fromId, toUsername, fromUsername } = req.body;
 
   if (!fromId || !toUsername) {
-    return res.json({ success: false, error: 'Missing fromId or toUsername' });
+    return res.json({ success: false, error: 'Не хватает fromId или toUsername' });
   }
 
   try {
-    // Получаем ID по username
+    // Получаем ID пользователя по username
     const chat = await bot.getChat(`@${toUsername}`);
     const toId = chat.id;
 
     // Сохраняем запрос
     exchangeRequests.set(`${fromId}->${toId}`, { fromId, toId, fromUsername });
 
-    // Кнопки
+    // Кнопки: принять / отклонить
     const keyboard = {
       inline_keyboard: [[
         {
@@ -110,7 +110,7 @@ app.post('/api/start-exchange', async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error('❌ Ошибка:', err);
+    console.error('❌ Ошибка отправки:', err);
     res.json({
       success: false,
       error: err.response?.body?.description || 'Пользователь не найден или не писал боту'
@@ -118,7 +118,7 @@ app.post('/api/start-exchange', async (req, res) => {
   }
 });
 
-// === Обработка отклонения ===
+// === Обработка нажатия "❌ Отклонить" ===
 bot.on('callback_query', async (query) => {
   const data = query.data;
   if (!data.startsWith('decline_')) return;
@@ -145,7 +145,7 @@ bot.on('callback_query', async (query) => {
   await bot.answerCallbackQuery(query.id, { text: 'Вы отклонили запрос' });
 });
 
-// === Главная ===
+// === Главная страница (чтобы Render не "спал") ===
 app.get('/', (req, res) => {
   res.send('<h1>🚀 Bupsi Server — работает. Установи вебхук: /set-webhook</h1>');
 });
