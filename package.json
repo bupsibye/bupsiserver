@@ -11,15 +11,5 @@
   },
   "engines": {
     "node": "18.x"
-  },
-  "description": "Telegram Mini App backend for gift exchange with Stars",
-  "keywords": [
-    "telegram",
-    "miniapp",
-    "stars",
-    "gift",
-    "exchange"
-  ],
-  "author": "Bupsi Dev",
-  "license": "MIT"
+  }
 }
