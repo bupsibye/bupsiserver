@@ -1,9 +1,8 @@
 const express = require('express');
-const bodyParser = require('body-parser');
 const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
-app.use(express.json());
+app.use(express.json()); // ❌ Не bodyParser, а express.json()
 
 // === НАСТРОЙКИ ===
 const BOT_TOKEN = '8212274685:AAEN_jjb3hUnVN9CxdR9lSrG416yQXmk4Tk';
@@ -13,8 +12,8 @@ const WEB_APP_URL = 'https://bupsiapp.vercel.app';
 // === БОТ ===
 const bot = new TelegramBot(BOT_TOKEN, { polling: false });
 
-// === ХРАНИЛИЩЕ: сессии обмена ===
-const exchangeSessions = new Map(); // sessionId → { fromId, fromUsername, status }
+// === ХРАНИЛИЩЕ сессий ===
+const exchangeSessions = new Map();
 
 // === УСТАНОВКА ВЕБХУКА ===
 app.get('/set-webhook', async (req, res) => {
@@ -22,18 +21,17 @@ app.get('/set-webhook', async (req, res) => {
   await bot.setWebHook(url);
   res.send(`
     <h1>✅ Вебхук установлен!</h1>
-    <p><strong>URL:</strong> <code>${url}</code></p>
-    <p>Напиши /start в боте, чтобы начать.</p>
+    <p><code>${url}</code></p>
+    <p>Напиши /start в боте.</p>
   `);
 });
 
-// === Telegram шлёт сюда обновления ===
 app.post(`/bot${BOT_TOKEN}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
-// === /start — с кнопкой Mini App ===
+// === /start ===
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const firstName = msg.from.first_name;
@@ -50,11 +48,10 @@ bot.onText(/\/start/, (msg) => {
 👋 Привет, ${firstName}! Добро пожаловать в Bupsi!
 
 Здесь ты можешь:
-- 💬 Обмениваться ⭐️ с друзьями
+- 💬 Обмениваться ⭐ с друзьями
 - 🎁 Покупать и дарить подарки
-- 📊 Повышать свой статус
 
-Нажми кнопку ниже, чтобы начать:
+Нажми кнопку ниже:
   `.trim();
 
   bot.sendMessage(chatId, message, {
@@ -63,29 +60,24 @@ bot.onText(/\/start/, (msg) => {
   }).catch(console.error);
 });
 
-// === API: начать обмен по username (через startapp ссылку) ===
+// === API: начать обмен по username ===
 app.post('/api/start-exchange-by-username', async (req, res) => {
   const { fromId, fromUsername, targetUsername } = req.body;
 
   if (!fromId || !fromUsername || !targetUsername) {
-    return res.json({ success: false, error: 'Не хватает данных: fromId, fromUsername, targetUsername' });
+    return res.json({ success: false, error: 'Не хватает данных' });
   }
 
-  // Генерируем уникальный ID сессии
   const sessionId = `ex_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-
-  // Сохраняем сессию
   exchangeSessions.set(sessionId, {
     fromId: Number(fromId),
     fromUsername,
     targetUsername,
-    status: 'pending',
-    timestamp: Date.now()
+    status: 'pending'
   });
 
-  // Отправляем сообщение через бота — но только если пользователь уже взаимодействовал с ботом
   try {
-    // Попробуем найти пользователя по username в кеше обновлений (если писал боту)
+    // Ищем пользователя среди тех, кто писал боту
     const updates = await bot.getUpdates();
     const targetUser = updates
       .map(u => u.message?.from || u.callback_query?.from)
@@ -94,7 +86,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     if (!targetUser) {
       return res.json({
         success: false,
-        error: `Пользователь @${targetUsername} не найден. Он должен был начать диалог с ботом.`
+        error: `@${targetUsername} не найден. Он должен был начать диалог с ботом.`
       });
     }
 
@@ -127,15 +119,12 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
 
     res.json({ success: true, message: `Запрос отправлен @${targetUsername}` });
   } catch (err) {
-    console.error('❌ Ошибка отправки запроса:', err);
-    res.json({
-      success: false,
-      error: 'Не удалось отправить запрос. Пользователь не найден или не писал боту.'
-    });
+    console.error('❌ Ошибка:', err);
+    res.json({ success: false, error: 'Не удалось отправить запрос' });
   }
 });
 
-// === Обработка: отклонение обмена ===
+// === Обработка: отклонение ===
 bot.on('callback_query', async (query) => {
   const data = query.data;
   if (!data.startsWith('decline_')) return;
@@ -143,65 +132,50 @@ bot.on('callback_query', async (query) => {
   const sessionId = data.split('_')[1];
   const session = exchangeSessions.get(sessionId);
 
-  if (!session) {
-    await bot.answerCallbackQuery(query.id, { text: 'Сессия не найдена' });
-    return;
+  if (session) {
+    exchangeSessions.delete(sessionId);
+
+    await bot.editMessageText('❌ Вы отклонили запрос.', {
+      chat_id: query.message.chat.id,
+      message_id: query.message.message_id
+    });
+
+    try {
+      await bot.sendMessage(session.fromId, `❌ @${session.targetUsername} отказался от вашего предложения.`);
+    } catch (err) {
+      console.error('Не удалось уведомить инициатора:', err);
+    }
+
+    await bot.answerCallbackQuery(query.id, { text: 'Отклонено' });
   }
-
-  exchangeSessions.delete(sessionId);
-
-  // Редактируем сообщение
-  await bot.editMessageText('❌ Вы отклонили запрос на обмен.', {
-    chat_id: query.message.chat.id,
-    message_id: query.message.message_id
-  });
-
-  // Уведомляем инициатора
-  try {
-    await bot.sendMessage(session.fromId, `❌ @${session.targetUsername} отказался от вашего предложения обмена`);
-  } catch (err) {
-    console.error('Не удалось уведомить инициатора:', err);
-  }
-
-  await bot.answerCallbackQuery(query.id, { text: 'Вы отклонили запрос' });
 });
 
-// === API: принять обмен (вызывается из Mini App) ===
-app.post('/api/accept-exchange/:sessionId', async (req, res) => {
+// === API: принять обмен (заглушка) ===
+app.post('/api/accept-exchange/:sessionId', (req, res) => {
   const { sessionId } = req.params;
-  const { userId } = req.body;
-
   const session = exchangeSessions.get(sessionId);
+
   if (!session) {
     return res.json({ success: false, error: 'Сессия не найдена' });
   }
 
-  // Здесь можно реализовать логику обмена подарками или звёзд
-  // Пока просто имитируем успешный обмен
-  setTimeout(() => {
-    exchangeSessions.delete(sessionId);
-  }, 1000);
+  exchangeSessions.delete(sessionId);
 
   res.json({
     success: true,
     stars: 50,
-    message: `Вы получили 50 ⭐ от @${session.fromUsername}`
+    message: `Вы получили 50 ⭐`
   });
 });
 
-// === Главная страница ===
+// === Главная ===
 app.get('/', (req, res) => {
-  res.send(`
-    <h1>🚀 Bupsi Server — работает</h1>
-    <p><a href="/set-webhook">🔧 Установить вебхук</a></p>
-    <p>Mini App: <a href="https://bupsiapp.vercel.app" target="_blank">Открыть</a></p>
-  `);
+  res.send('<h1>🚀 Bupsi Server — работает</h1><p><a href="/set-webhook">🔧 Установить вебхук</a></p>');
 });
 
-// === ЗАПУСК ===
+// === Запуск ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);
   console.log(`🔧 Установи вебхук: ${WEBHOOK_URL}/set-webhook`);
 });
-
