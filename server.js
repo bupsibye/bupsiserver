@@ -3,10 +3,11 @@ const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
 
-// === Парсим JSON ===
+// === Парсим JSON и статика ===
 app.use(express.json());
+app.use(express.static('.'));
 
-// === CORS: разрешаем фронтенд на Vercel ===
+// === CORS ===
 const allowedOrigins = [
   'https://t.me',
   'https://web.telegram.org',
@@ -20,15 +21,9 @@ app.use((req, res, next) => {
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
-
-// Раздаём статику (на случай, если понадобится)
-app.use(express.static('.'));
 
 // === Переменные ===
 const BOT_TOKEN = process.env.BOT_TOKEN || '8212274685:AAEN_jjb3hUnVN9CxdR9lSrG416yQXmk4Tk';
@@ -37,51 +32,38 @@ const PORT = process.env.PORT || 3000;
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: false });
 
-console.log("✅ BOT_TOKEN:", BOT_TOKEN);
-console.log("✅ SERVER_URL:", SERVER_URL);
-console.log("✅ PORT:", PORT);
-
-// === Webhook URL ===
+// === Webhook ===
 const webhookUrl = `${SERVER_URL}/${BOT_TOKEN}`;
-
-// === Обработка обновлений от Telegram ===
 app.post(`/${BOT_TOKEN}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
-// === ПРОВЕРКА: API живо? ===
-app.get('/api/test', (req, res) => {
-  res.json({ success: true, message: "API живо" });
-});
-
-// === Проверка Webhook ===
-app.get('/webhook-info', async (req, res) => {
-  try {
-    const info = await bot.getWebHookInfo();
-    res.json(info);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// === ВРЕМЕННОЕ ХРАНИЛИЩЕ ===
-const users = new Map(); // userId → { stars, username }
-const exchanges = new Map();
+// === ХРАНИЛИЩЕ ===
+const users = new Map(); // chatId → { stars, username }
+const gifts = new Map(); // giftId → { id, name, ownerId, inExchange }
+const exchanges = new Map(); // sessionId → { fromId, toId, stars, status }
+const exchangeSessions = new Map(); // sessionId → { fromId, toId, fromGiftId, toGiftId, fromConfirmed, toConfirmed }
 const history = [];
 
-// === ОБРАБОТЧИК /start — сохраняем пользователя ===
+let giftIdCounter = 1;
+
+// === ЗАПУСК ===
+app.listen(PORT, async () => {
+  console.log(`🚀 Сервер запущен на порту ${PORT}`);
+  await bot.setWebHook(webhookUrl);
+  console.log(`✅ Webhook установлен: ${webhookUrl}`);
+});
+
+// === /start — приветствие + обработка startapp ===
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const username = msg.from.username || `user${chatId}`;
-  console.log("📩 /start от:", chatId, username);
+  const startParam = msg.text.split(' ')[1];
 
-  // Сохраняем пользователя
   if (!users.has(chatId)) {
     users.set(chatId, { stars: 0, username });
   }
-
-  const startParam = msg.text.split(' ')[1];
 
   let messageText, buttonText, buttonUrl;
 
@@ -118,59 +100,64 @@ bot.onText(/\/start/, (msg) => {
       ]
     }
   }).catch(err => {
-    console.error(`❌ Ошибка отправки /start ${chatId}:`, err.response?.body?.description);
+    console.error(`❌ Ошибка /start:`, err.response?.body?.description);
   });
 });
 
-// === API: Баланс ===
+// === Обработка: отклонение обмена звёзд/подарков ===
+bot.on('callback_query', async (query) => {
+  const data = query.data;
+  const chatId = query.message.chat.id;
+
+  if (data.startsWith('decline_exchange_')) {
+    const sessionId = data.split('_')[2];
+    const session = exchangeSessions.get(sessionId) || exchanges.get(sessionId);
+    if (!session || session.toId !== chatId) return;
+
+    session.status = 'declined';
+
+    await bot.answerCallbackQuery(query.id, { text: 'Вы отклонили обмен' });
+    await bot.sendMessage(session.fromId, `❌ @${session.toUsername || 'Пользователь'} отказался от обмена`);
+    await bot.editMessageText('❌ Обмен отклонён.', {
+      chat_id: chatId,
+      message_id: query.message.message_id
+    });
+  }
+});
+
+// === API: баланс звёзд ===
 app.get('/api/stars/:userId', (req, res) => {
   const userId = parseInt(req.params.userId);
-  if (isNaN(userId)) return res.status(400).json({ error: "Неверный ID" });
-
-  let user = users.get(userId);
-  if (!user) {
-    user = { stars: 0, username: `user${userId}` };
-    users.set(userId, user);
-  }
-
+  const user = users.get(userId) || { stars: 0, username: `user${userId}` };
   res.json({ stars: user.stars });
 });
 
-// === API: Начать обмен ===
+// === API: история ===
+app.get('/api/history/:userId', (req, res) => {
+  const userHistory = history
+    .filter(h => h.userId == req.params.userId)
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .slice(0, 50);
+  res.json(userHistory);
+});
+
+// === API: начать обмен звёздами ===
 app.post('/api/start-exchange-by-username', async (req, res) => {
   const { fromId, fromUsername, targetUsername } = req.body;
+  if (!fromId || !fromUsername || !targetUsername) return res.json({ success: false });
 
-  if (!fromId || !fromUsername || !targetUsername) {
-    return res.json({ success: false, error: "Недостаточно данных" });
-  }
-
-  // Ищем пользователя по username
   let toId = null;
-  let toUser = null;
-
   for (const [id, user] of users) {
     if (user.username === targetUsername) {
       toId = id;
-      toUser = user;
       break;
     }
   }
+  if (!toId) return res.json({ success: false, error: "Пользователь не найден" });
 
-  if (!toId) {
-    return res.json({ success: false, error: "Пользователь не найден или не писал боту" });
-  }
-
-  const stars = 50;
   const sessionId = `ex_${Date.now()}_${fromId}`;
-
   exchanges.set(sessionId, {
-    fromId,
-    fromUsername,
-    toId,
-    toUsername: targetUsername,
-    stars,
-    status: 'pending',
-    timestamp: Date.now()
+    fromId, toId, stars: 50, status: 'pending', fromUsername, toUsername: targetUsername
   });
 
   try {
@@ -178,7 +165,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
 🔄 Запрос на обмен!
 
 От: @${fromUsername}
-Сумма: ${stars} ⭐
+Сумма: 50 ⭐
 
 👉 Примите или отклоните:
     `, {
@@ -195,32 +182,25 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     history.push({
       userId: fromId,
       type: 'exchange_pending',
-      description: `Запрос на обмен ${stars} ⭐ пользователю @${targetUsername}`,
+      description: `Запрос на обмен 50 ⭐ пользователю @${targetUsername}`,
       date: new Date().toISOString()
     });
 
     res.json({ success: true, sessionId });
   } catch (err) {
-    console.error("❌ Ошибка отправки:", err.response?.body?.description || err.message);
-    res.json({ success: false, error: "Не удалось отправить запрос. Пользователь не писал боту." });
+    res.json({ success: false });
   }
 });
 
-// === API: Принять обмен ===
+// === API: принять обмен звёздами ===
 app.get('/api/accept-exchange/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   const exchange = exchanges.get(sessionId);
-
-  if (!exchange || exchange.status !== 'pending') {
-    return res.json({ success: false, error: "Сессия не найдена или уже обработана" });
-  }
+  if (!exchange || exchange.status !== 'pending') return res.json({ error: "Сессия недействительна" });
 
   const fromUser = users.get(exchange.fromId);
   const toUser = users.get(exchange.toId);
-
-  if (!fromUser || !toUser || fromUser.stars < exchange.stars) {
-    return res.json({ success: false, error: "Ошибка: недостаточно средств или пользователь не найден" });
-  }
+  if (!fromUser || !toUser || fromUser.stars < exchange.stars) return res.json({ error: "Ошибка" });
 
   fromUser.stars -= exchange.stars;
   toUser.stars += exchange.stars;
@@ -229,94 +209,131 @@ app.get('/api/accept-exchange/:sessionId', async (req, res) => {
   history.push({
     userId: exchange.fromId,
     type: 'stars_out',
-    description: `Отправлено ${exchange.stars} ⭐ пользователю @${toUser.username}`,
+    description: `Отправлено 50 ⭐ пользователю @${toUser.username}`,
     date: new Date().toISOString()
   });
-
   history.push({
     userId: exchange.toId,
     type: 'stars_in',
-    description: `Получено ${exchange.stars} ⭐ от @${fromUser.username}`,
+    description: `Получено 50 ⭐ от @${fromUser.username}`,
     date: new Date().toISOString()
   });
 
-  await bot.sendMessage(exchange.fromId, `✅ Обмен принят! Вы отправили ${exchange.stars} ⭐`);
-  await bot.sendMessage(exchange.toId, `✅ Обмен завершён! Вы получили ${exchange.stars} ⭐`);
+  await bot.sendMessage(exchange.fromId, `✅ Обмен принят! Вы отправили 50 ⭐`);
+  await bot.sendMessage(exchange.toId, `✅ Обмен завершён! Вы получили 50 ⭐`);
 
-  res.json({ success: true, stars: toUser.stars });
+  res.json({ success: true });
 });
 
-// === API: История ===
-app.get('/api/history/:userId', (req, res) => {
-  const userId = parseInt(req.params.userId);
-  if (isNaN(userId)) return res.status(400).json({ error: "Неверный ID" });
-
-  const userHistory = history
-    .filter(h => h.userId === userId)
-    .sort((a, b) => new Date(b.date) - new Date(a.date))
-    .slice(0, 50);
-
-  res.json(userHistory);
+// === API: подарки ===
+app.post('/api/add-gift', (req, res) => {
+  const { userId, name } = req.body;
+  const giftId = giftIdCounter++;
+  gifts.set(giftId, {
+    id: giftId,
+    name,
+    ownerId: Number(userId),
+    inExchange: false
+  });
+  res.json({ success: true, giftId });
 });
 
-// === API: Диалог подтверждён ===
-app.get('/api/hello/:userId', async (req, res) => {
-  const userId = parseInt(req.params.userId);
+app.get('/api/user-gifts/:userId', (req, res) => {
+  const userId = Number(req.params.userId);
+  const userGifts = [...gifts.values()].filter(g => g.ownerId === userId && !g.inExchange);
+  res.json(userGifts);
+});
+
+// === API: обмен подарками ===
+app.post('/api/start-exchange-gifts', async (req, res) => {
+  const { fromId, toId, myGiftId } = req.body;
+  const fromUsername = users.get(fromId)?.username || 'user';
+  const toUsername = users.get(toId)?.username || 'user';
+
+  const sessionId = `gift_ex_${Date.now()}`;
+
+  const gift = gifts.get(myGiftId);
+  if (!gift || gift.ownerId !== Number(fromId)) {
+    return res.json({ success: false });
+  }
+
+  exchangeSessions.set(sessionId, {
+    fromId, toId, fromGiftId: myGiftId, toGiftId: null,
+    fromUsername, toUsername, fromConfirmed: false, toConfirmed: false, status: 'pending'
+  });
+
   try {
-    await bot.sendMessage(userId, "✅ Диалог подтверждён — всё работает!", { parse_mode: 'Markdown' });
-    res.json({ success: true });
-  } catch (err) {
-    res.json({ success: false, error: "Напишите /start боту" });
-  }
-});
-
-// === ОБРАБОТЧИК: отклонение обмена ===
-bot.on('callback_query', async (callbackQuery) => {
-  const { id, from, data, message } = callbackQuery;
-  const chatId = from.id;
-
-  if (data?.startsWith('decline_exchange_')) {
-    const sessionId = data.replace('decline_exchange_', '');
-    const exchange = exchanges.get(sessionId);
-
-    if (!exchange || exchange.status !== 'pending' || exchange.toId !== chatId) {
-      return bot.answerCallbackQuery(id, { text: "Сессия недействительна", show_alert: true });
-    }
-
-    // Меняем статус
-    exchange.status = 'declined';
-
-    // Отправляем уведомление отправителю
-    try {
-      await bot.sendMessage(exchange.fromId, `❌ @${exchange.toUsername} отказался от вашего предложения обмена`);
-    } catch (err) {
-      console.error("❌ Не удалось уведомить отправителя:", err);
-    }
-
-    // Уведомляем получателя
-    await bot.answerCallbackQuery(id, {
-      text: "Вы отклонили обмен",
-      show_alert: true
+    await bot.sendMessage(toId, `🎁 *Обмен подарками!* От @${fromUsername}`, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "🎁 Выбрать подарок", web_app: { url: `https://bupsiapp.vercel.app/exchange.html?startapp=${sessionId}` } },
+            { text: "❌ Отклонить", callback_data: `decline_exchange_${sessionId}` }
+          ]
+        ]
+      },
+      parse_mode: 'Markdown'
     });
-
-    // Убираем кнопки
-    bot.editMessageReplyMarkup(
-      { inline_keyboard: [] },
-      { chat_id: chatId, message_id: message.message_id }
-    );
+    res.json({ success: true, sessionId });
+  } catch (err) {
+    res.json({ success: false });
   }
 });
 
-// === ЗАПУСК СЕРВЕРА ===
-app.listen(PORT, () => {
-  console.log(`🚀 Сервер запущен на порту ${PORT}`);
+app.post('/api/exchange/select-gift', (req, res) => {
+  const { sessionId, userId, giftId } = req.body;
+  const session = exchangeSessions.get(sessionId);
+  if (!session || session.toId !== Number(userId)) return res.json({ error: "Нет доступа" });
 
-  setTimeout(async () => {
-    try {
-      await bot.setWebHook(webhookUrl);
-      console.log(`✅ Webhook УСПЕШНО установлен: ${webhookUrl}`);
-    } catch (err) {
-      console.error('❌ Ошибка установки Webhook:', err.response?.body?.description || err.message);
+  const gift = gifts.get(giftId);
+  if (!gift || gift.ownerId !== Number(userId)) return res.json({ error: "Не владелец" });
+
+  session.toGiftId = giftId;
+  exchangeSessions.set(sessionId, session);
+  res.json({ success: true });
+});
+
+app.post('/api/confirm-exchange', async (req, res) => {
+  const { sessionId, userId } = req.body;
+  const session = exchangeSessions.get(sessionId);
+  if (!session) return res.json({ error: "not_found" });
+
+  if (session.fromId === userId) session.fromConfirmed = true;
+  if (session.toId === userId) session.toConfirmed = true;
+
+  if (session.fromConfirmed && session.toConfirmed) {
+    const fromGift = gifts.get(session.fromGiftId);
+    const toGift = gifts.get(session.toGiftId);
+
+    if (fromGift && toGift) {
+      fromGift.ownerId = session.toId;
+      toGift.ownerId = session.fromId;
+      fromGift.inExchange = true;
+      toGift.inExchange = true;
+
+      await bot.sendMessage(session.fromId, `✅ Подарки обменены! Вы получили: ${toGift.name}`);
+      await bot.sendMessage(session.toId, `✅ Подарки обменены! Вы получили: ${fromGift.name}`);
+
+      history.push({
+        userId: session.fromId,
+        type: 'gifts_received',
+        description: `Получил "${toGift.name}" от @${session.toUsername}`,
+        date: new Date().toISOString()
+      });
+      history.push({
+        userId: session.toId,
+        type: 'gifts_received',
+        description: `Получил "${fromGift.name}" от @${session.fromUsername}`,
+        date: new Date().toISOString()
+      });
     }
-  }, 3000);
+  }
+
+  res.json({ success: true });
+});
+
+app.get('/api/session/:sessionId', (req, res) => {
+  const session = exchangeSessions.get(req.params.sessionId);
+  if (!session) return res.json({ error: "not_found" });
+  res.json(session);
 });
