@@ -24,10 +24,9 @@ app.get('/set-webhook', async (req, res) => {
     res.send(`
       <h1>✅ Вебхук установлен!</h1>
       <p><code>${url}</code></p>
-      <p>Откройте бота: <a href="https://t.me/knoxway_bot">@knoxway_bot</a> и напишите <code>/start</code></p>
+      <p>Откройте: <a href="https://t.me/knoxway_bot">@knoxway_bot</a></p>
     `);
   } catch (err) {
-    console.error('❌ Ошибка установки вебхука:', err);
     res.status(500).send(`❌ Ошибка: ${err.message}`);
   }
 });
@@ -43,10 +42,8 @@ bot.onText(/\/start/, (msg) => {
   const firstName = msg.from.first_name;
   const username = msg.from.username;
 
-  // Сохраняем username в кэш
   if (username) {
     userCache.set(username.toLowerCase(), chatId);
-    console.log(`✅ Кэширован пользователь: @${username} → ${chatId}`);
   }
 
   const keyboard = {
@@ -60,9 +57,8 @@ bot.onText(/\/start/, (msg) => {
 👋 Привет, ${firstName}! Добро пожаловать в Knox Market!
 
 Здесь ты можешь:
-- 💬 Обмениваться ⭐️ с друзьями
+- 💬 Обмениваться ⭐ с друзьями
 - 🎁 Покупать и дарить подарки
-- 📊 Повышать свой статус
 
 Нажми кнопку ниже, чтобы начать:
   `.trim();
@@ -70,9 +66,7 @@ bot.onText(/\/start/, (msg) => {
   bot.sendMessage(chatId, message, {
     reply_markup: keyboard,
     parse_mode: 'Markdown'
-  }).catch(err => {
-    console.error('❌ Ошибка отправки /start:', err);
-  });
+  }).catch(console.error);
 });
 
 // === API: начать обмен по username ===
@@ -83,6 +77,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     return res.json({ success: false, error: 'Не хватает данных' });
   }
 
+  // Генерируем сессию
   const sessionId = `ex_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
   exchangeSessions.set(sessionId, {
     fromId: Number(fromId),
@@ -91,7 +86,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
     status: 'pending'
   });
 
-  // Ищем получателя по username
+  // Ищем получателя
   const toChatId = userCache.get(targetUsername.toLowerCase());
 
   if (!toChatId) {
@@ -102,27 +97,26 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
   }
 
   try {
+    const message = `
+🔄 *Предложение обмена!*
+
+Пользователь *@${fromUsername}* предлагает начать обмен подарками.
+
+Примете ли вы предложение?
+    `.trim();
+
     const keyboard = {
       inline_keyboard: [[
         {
-          text: '✅ Принять',
+          text: '✅ Согласиться',
           web_app: { url: `${WEB_APP_URL}?startapp=exchange_${sessionId}` }
         },
         {
-          text: '❌ Отклонить',
+          text: '❌ Отказаться',
           callback_data: `decline_${sessionId}`
         }
       ]]
     };
-
-    const message = `
-🔄 *Запрос на обмен!*
-
-От: @${fromUsername}
-Предлагает начать обмен подарками
-
-👉 Примите или отклоните:
-    `.trim();
 
     await bot.sendMessage(toChatId, message, {
       reply_markup: keyboard,
@@ -131,12 +125,12 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
 
     res.json({ success: true, message: `Запрос отправлен @${targetUsername}` });
   } catch (err) {
-    console.error('❌ Ошибка отправки сообщения:', err);
+    console.error('❌ Ошибка отправки:', err);
     res.json({ success: false, error: 'Не удалось отправить сообщение' });
   }
 });
 
-// === Обработка: отклонение ===
+// === Обработка: отказ от обмена ===
 bot.on('callback_query', async (query) => {
   const data = query.data;
   if (!data.startsWith('decline_')) return;
@@ -147,13 +141,19 @@ bot.on('callback_query', async (query) => {
   if (session) {
     exchangeSessions.delete(sessionId);
 
+    // Редактируем сообщение
     await bot.editMessageText('❌ Вы отклонили запрос на обмен.', {
       chat_id: query.message.chat.id,
       message_id: query.message.message_id
     });
 
+    // Уведомляем инициатора
     try {
-      await bot.sendMessage(session.fromId, `❌ @${session.targetUsername} отказался от вашего предложения обмена`);
+      await bot.sendMessage(session.fromId, `
+❌ *@${session.targetUsername}* отказался от вашего предложения обмена.
+      `.trim(), {
+        parse_mode: 'Markdown'
+      });
     } catch (err) {
       console.error('❌ Не удалось уведомить инициатора:', err);
     }
@@ -186,7 +186,6 @@ app.get('/', (req, res) => {
     <h1>🚀 Knox Market Server — работает</h1>
     <p><a href="/set-webhook">🔧 Установить вебхук</a></p>
     <p>Пользователей в кэше: <strong>${userCache.size}</strong></p>
-    <p>Бот: <a href="https://t.me/knoxway_bot">@knoxway_bot</a></p>
   `);
 });
 
@@ -195,5 +194,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);
   console.log(`🔧 Установи вебхук: ${WEBHOOK_URL}/set-webhook`);
-  console.log(`🌐 Бот: @knoxway_bot`);
 });
