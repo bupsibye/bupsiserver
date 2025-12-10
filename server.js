@@ -24,9 +24,10 @@ app.get('/set-webhook', async (req, res) => {
     res.send(`
       <h1>✅ Вебхук установлен!</h1>
       <p><code>${url}</code></p>
-      <p>Напишите /start в <a href="https://t.me/bupsibot">@bupsibot</a></p>
+      <p>Откройте бота: <a href="https://t.me/knoxway_bot">@knoxway_bot</a> и напишите <code>/start</code></p>
     `);
   } catch (err) {
+    console.error('❌ Ошибка установки вебхука:', err);
     res.status(500).send(`❌ Ошибка: ${err.message}`);
   }
 });
@@ -42,24 +43,26 @@ bot.onText(/\/start/, (msg) => {
   const firstName = msg.from.first_name;
   const username = msg.from.username;
 
-  // Сохраняем в кэш
+  // Сохраняем username в кэш
   if (username) {
     userCache.set(username.toLowerCase(), chatId);
+    console.log(`✅ Кэширован пользователь: @${username} → ${chatId}`);
   }
 
   const keyboard = {
     inline_keyboard: [[{
-      text: '🎁 Открыть Bupsi Market',
+      text: '🎁 Открыть Knox Market',
       web_app: { url: WEB_APP_URL }
     }]]
   };
 
   const message = `
-👋 Привет, ${firstName}! Добро пожаловать в Bupsi!
+👋 Привет, ${firstName}! Добро пожаловать в Knox Market!
 
 Здесь ты можешь:
-- 💬 Обмениваться ⭐ с друзьями
+- 💬 Обмениваться ⭐️ с друзьями
 - 🎁 Покупать и дарить подарки
+- 📊 Повышать свой статус
 
 Нажми кнопку ниже, чтобы начать:
   `.trim();
@@ -67,7 +70,9 @@ bot.onText(/\/start/, (msg) => {
   bot.sendMessage(chatId, message, {
     reply_markup: keyboard,
     parse_mode: 'Markdown'
-  }).catch(console.error);
+  }).catch(err => {
+    console.error('❌ Ошибка отправки /start:', err);
+  });
 });
 
 // === API: начать обмен по username ===
@@ -126,7 +131,7 @@ app.post('/api/start-exchange-by-username', async (req, res) => {
 
     res.json({ success: true, message: `Запрос отправлен @${targetUsername}` });
   } catch (err) {
-    console.error('❌ Ошибка отправки:', err);
+    console.error('❌ Ошибка отправки сообщения:', err);
     res.json({ success: false, error: 'Не удалось отправить сообщение' });
   }
 });
@@ -150,7 +155,7 @@ bot.on('callback_query', async (query) => {
     try {
       await bot.sendMessage(session.fromId, `❌ @${session.targetUsername} отказался от вашего предложения обмена`);
     } catch (err) {
-      console.error('Не удалось уведомить инициатора:', err);
+      console.error('❌ Не удалось уведомить инициатора:', err);
     }
 
     await bot.answerCallbackQuery(query.id, { text: 'Отклонено' });
@@ -178,9 +183,10 @@ app.post('/api/accept-exchange/:sessionId', (req, res) => {
 // === Главная страница ===
 app.get('/', (req, res) => {
   res.send(`
-    <h1>🚀 Bupsi Server — работает</h1>
+    <h1>🚀 Knox Market Server — работает</h1>
     <p><a href="/set-webhook">🔧 Установить вебхук</a></p>
-    <p>Пользователей в кэше: ${userCache.size}</p>
+    <p>Пользователей в кэше: <strong>${userCache.size}</strong></p>
+    <p>Бот: <a href="https://t.me/knoxway_bot">@knoxway_bot</a></p>
   `);
 });
 
@@ -189,4 +195,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);
   console.log(`🔧 Установи вебхук: ${WEBHOOK_URL}/set-webhook`);
+  console.log(`🌐 Бот: @knoxway_bot`);
 });
