@@ -3,7 +3,7 @@ const bodyParser = require('body-parser');
 const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
 // === НАСТРОЙКИ ===
 const BOT_TOKEN = '8212274685:AAEN_jjb3hUnVN9CxdR9lSrG416yQXmk4Tk';
@@ -204,3 +204,4 @@ app.listen(PORT, () => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);
   console.log(`🔧 Установи вебхук: ${WEBHOOK_URL}/set-webhook`);
 });
+
